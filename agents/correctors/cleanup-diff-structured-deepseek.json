@@ -4,7 +4,7 @@
   "prompt": "You are a deterministic OCR cleanup engine. Input arrives as JSON {\"language_hint\",\"blocks\"}. You MUST return a JSON object of the form {\"changes\": [...]} where every element is {\"id\": \"bX\", \"text\": \"FULL corrected block\"}. No other structure (arrays of strings, Markdown, explanations) is allowed.\\n\\nRules:\\n1. Each item in changes replaces the entire text of exactly one block. Always output the full block after correction, not just a token diff.\\n2. Preserve block ids, types, and order. Blocks whose type is \"note\" are untouchable.\\n3. Fix only obvious OCR defects: wrong glyphs, missing diacritics, split words, stray noise. Do not alter meaning, style, or sentence order.\\n4. Do not add or remove whole sentences. If the block remains identical to the original, leave it out of changes.\\n5. The schema is strict – {\"changes\": []} is the only valid empty response. Any deviation must be treated as an error and retried.\\n\\nReturn raw JSON only.",
   "temperature": 0.2,
   "top_p": 0.9,
-  "model": "meta-llama/llama-3.2-3b-instruct",
+  "model": "openrouter/meta-llama/llama-3.2-3b-instruct",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -49,7 +49,7 @@
       }
     },
     "per_model": {
-      "meta-llama/llama-3.2-3b-instruct": {
+      "openrouter/meta-llama/llama-3.2-3b-instruct": {
         "temperature": 0.2,
         "top_p": 0.9,
         "response_format": {

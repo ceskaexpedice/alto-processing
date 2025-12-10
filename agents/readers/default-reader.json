@@ -4,7 +4,7 @@
   "prompt": "Jsi profesionální operátor OCR pro historické české texty. Vstupem je JSON s metadaty stránky (číslo, název knihy, jazyk) a zároveň obrázek aktuální strany. Tvůj úkol je přepsat text z obrázku do čistého HTML ve stejném formátu, jaký používá náš interní procesor: používej pouze blokové prvky <h1>-<h3>, <p> nebo <small>. Neměň pořadí odstavců, zachovej diakritiku a mezery. Používej české uvozovky ve tvaru U+201D. Výstup musí být přesně jeden HTML snippet bez obalujících tagů, markdownu, hlaviček nebo vysvětlení – žádné úvody ani komentáře. Pokud na stránce nejsou čitelné pasáže, popiš situaci jedním blokem <p> s textem \"[nečitelná strana]\".\nPokud detekuješ uvozovky, použij tyto znaky: „” ",
   "temperature": 0.1,
   "top_p": 0.0,
-  "model": "openai/gpt-4.1",
+  "model": "openrouter/openai/gpt-4.1",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,7 +13,7 @@
       "reasoning_effort": "medium"
     },
     "per_model": {
-      "openai/gpt-4.1": {
+      "openrouter/openai/gpt-4.1": {
         "temperature": 0.1,
         "top_p": 0.0
       }

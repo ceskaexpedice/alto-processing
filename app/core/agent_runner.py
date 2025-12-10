@@ -41,6 +41,7 @@ load_dotenv()
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 MODEL_REGISTRY_PATH = ROOT_DIR / "config" / "models.json"
+PROVIDER_REGISTRY_PATH = ROOT_DIR / "config" / "providers.json"
 
 
 def _load_model_registry() -> Dict[str, Any]:
@@ -54,10 +55,24 @@ def _load_model_registry() -> Dict[str, Any]:
         raise AgentRunnerError(f"Soubor s modely je neplatný JSON: {MODEL_REGISTRY_PATH}") from exc
 
 
+def _load_provider_registry() -> Dict[str, Any]:
+    try:
+        with PROVIDER_REGISTRY_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+            return payload if isinstance(payload, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        raise AgentRunnerError(f"Soubor s providery je neplatný JSON: {PROVIDER_REGISTRY_PATH}") from exc
+
+
 MODEL_REGISTRY = _load_model_registry()
+PROVIDER_REGISTRY = _load_provider_registry()
 MODEL_DEFINITION_MAP: Dict[str, Dict[str, Any]] = {}
 MODEL_CAPABILITY_MAP: Dict[str, Dict[str, bool]] = {}
 MODEL_DEFAULTS_MAP: Dict[str, Dict[str, Any]] = {}
+MODEL_UPSTREAM_MAP: Dict[str, str] = {}
+PROVIDER_DEFINITION_MAP: Dict[str, Dict[str, Any]] = {}
 ENABLE_RESPONSE_FORMAT = False  # sleeper feature – enable once OpenRouter enforces response_format
 
 DEFAULT_API_BASES = [
@@ -174,8 +189,10 @@ if ENABLE_RESPONSE_FORMAT:
         client: OpenAI,
         request_kwargs: Dict[str, Any],
         native_response_format_support: bool,
+        provider_config: Dict[str, Any],
+        api_key: str,
     ) -> Response:
-        if USE_DIRECT_OPENAI or native_response_format_support:
+        if native_response_format_support:
             return client.responses.create(**request_kwargs)
 
         payload = copy.deepcopy(request_kwargs)
@@ -183,21 +200,18 @@ if ENABLE_RESPONSE_FORMAT:
         if isinstance(extra_body, dict):
             payload.update(extra_body)
 
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        if not api_key:
-            raise AgentRunnerError(
-                "Chybí proměnná prostředí OPENROUTER_API_KEY – nelze odeslat požadavek s response_format."
-            )
+        api_base = str(provider_config.get("api_base") or "").rstrip("/")
+        if not api_base:
+            raise AgentRunnerError("Provider nemá nastavené 'api_base' pro Responses API.")
 
-        url = OPENROUTER_BASE_URL.rstrip("/") + "/responses"
+        url = api_base + "/responses"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        if OPENROUTER_SITE_URL:
-            headers["HTTP-Referer"] = OPENROUTER_SITE_URL
-        if OPENROUTER_APP_NAME:
-            headers["X-Title"] = OPENROUTER_APP_NAME
+        default_headers = provider_config.get("default_headers")
+        if isinstance(default_headers, dict):
+            headers.update(default_headers)
 
         response = requests.post(url, headers=headers, json=payload, timeout=90)
         try:
@@ -243,15 +257,21 @@ else:
         client: OpenAI,
         request_kwargs: Dict[str, Any],
         native_response_format_support: bool,
+        _: Optional[Dict[str, Any]] = None,
+        __: Optional[str] = None,
     ) -> Response:
         return client.responses.create(**request_kwargs)
 
     def _validate_text_block_corrector(_: Any) -> Tuple[bool, str]:
         return True, ""
-_CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT: Optional[bool] = None
+_CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT: Dict[str, bool] = {}
 
 
 def _normalize_model_id(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+def _normalize_provider_id(value: Optional[str]) -> str:
     return (value or "").strip().lower()
 
 
@@ -275,6 +295,36 @@ for entry in MODEL_REGISTRY.get("models", []) or []:
     raw_defaults = entry.get("defaults") or {}
     if isinstance(raw_defaults, dict):
         MODEL_DEFAULTS_MAP[normalized] = raw_defaults
+    upstream_id = entry.get("upstream_id") or raw_id
+    if isinstance(upstream_id, str):
+        MODEL_UPSTREAM_MAP[normalized] = upstream_id
+
+for entry in PROVIDER_REGISTRY.get("providers", []) or []:
+    if not isinstance(entry, dict):
+        continue
+    normalized = _normalize_provider_id(entry.get("name"))
+    if not normalized:
+        continue
+    PROVIDER_DEFINITION_MAP[normalized] = entry
+
+
+def _get_provider_config(provider_name: str) -> Dict[str, Any]:
+    normalized = _normalize_provider_id(provider_name)
+    if not normalized or normalized not in PROVIDER_DEFINITION_MAP:
+        raise AgentRunnerError(f"Nenalezen provider '{provider_name}' v konfiguraci.")
+    return PROVIDER_DEFINITION_MAP[normalized]
+
+
+def _require_api_key(provider_config: Dict[str, Any]) -> str:
+    env_var = str(provider_config.get("api_key_env") or "").strip()
+    if not env_var:
+        raise AgentRunnerError("Provider nemá definovanou proměnnou s API klíčem (api_key_env).")
+    api_key = os.getenv(env_var)
+    if not api_key:
+        raise AgentRunnerError(
+            f"Chybí proměnná prostředí {env_var}. Uložte ji do .env nebo prostředí."
+        )
+    return api_key
 
 
 def _model_supports_scan(model_id: str) -> bool:
@@ -543,12 +593,6 @@ DEFAULT_MODEL = (
 )
 DEFAULT_LANGUAGE_HINT = os.getenv("OPENAI_LANGUAGE_HINT") or "cs"
 
-USE_DIRECT_OPENAI = str(os.getenv("USE_DIRECT_OPENAI", "0")).strip().lower() in {"1", "true", "yes", "on"}
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL") or os.getenv("OPENROUTER_REFERER") or ""
-OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME") or os.getenv("OPENROUTER_TITLE") or "Alto Processing Tools"
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or ""
-
 REASONING_EFFORT_VALUES = {"low", "medium", "high"}
 FALLBACK_REASONING_PREFIXES = ("openai/gpt-5", "openai/o1", "openai/o3", "openai/o4", "gpt-5", "o1", "o3", "o4")
 # Backwards compatibility for modules importing REASONING_PREFIXES directly.
@@ -619,9 +663,10 @@ def _get_model_capabilities(model: str) -> Dict[str, bool]:
     normalized = _normalize_model_id(model)
     if normalized in MODEL_CAPABILITY_MAP:
         return MODEL_CAPABILITY_MAP[normalized]
+    upstream = _normalize_model_id(MODEL_UPSTREAM_MAP.get(normalized))
     for prefix in FALLBACK_REASONING_PREFIXES:
         lowered = prefix.lower()
-        if normalized == lowered or normalized.startswith(f"{lowered}-"):
+        if upstream == lowered or upstream.startswith(f"{lowered}-"):
             caps = {"temperature": False, "top_p": False, "reasoning": True}
             if ENABLE_RESPONSE_FORMAT:
                 caps["response_format"] = True
@@ -637,6 +682,12 @@ def _normalize_reasoning_effort(value: Optional[Any]) -> str:
         return DEFAULT_REASONING_EFFORT
     normalized = str(value).strip().lower()
     return normalized if normalized in REASONING_EFFORT_VALUES else DEFAULT_REASONING_EFFORT
+
+
+def _get_upstream_model_id(model_id: str) -> str:
+    normalized = _normalize_model_id(model_id)
+    upstream = MODEL_UPSTREAM_MAP.get(normalized)
+    return upstream or model_id
 
 
 def _load_json_if_string(value: Any) -> Any:
@@ -820,61 +871,49 @@ class AgentDiffApplicationError(RuntimeError):
     """Raised when diff-based agent output cannot be applied."""
 
 
-_client: Optional[OpenAI] = None
+_clients: Dict[str, OpenAI] = {}
 
 
-def _get_client() -> OpenAI:
-    """Return a cached OpenAI client, validating prerequisites first."""
-    global _client
-    if _client is not None:
-        return _client
+def _get_client(provider_name: str) -> OpenAI:
+    """Return a cached OpenAI client for the given provider."""
+    normalized = _normalize_provider_id(provider_name)
+    if not normalized:
+        raise AgentRunnerError("Není zadaný provider pro model.")
+    if normalized in _clients:
+        return _clients[normalized]
     if OpenAI is None:
         reason = f"ImportError: {_import_error}" if _import_error else ""
         message = "Knihovna 'openai' není nainstalovaná. Přidejte ji do prostředí."
         if reason:
             message = f"{message} ({reason})"
         raise AgentRunnerError(message)
-    if USE_DIRECT_OPENAI:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise AgentRunnerError(
-                "Chybí proměnná prostředí OPENAI_API_KEY. Uložte ji do .env nebo prostředí."
-            )
-        _client = OpenAI(api_key=api_key)
-        return _client
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise AgentRunnerError(
-            "Chybí proměnná prostředí OPENROUTER_API_KEY. Uložte ji do .env nebo prostředí."
-        )
-    client_kwargs: Dict[str, Any] = {
-        "api_key": api_key,
-        "base_url": OPENROUTER_BASE_URL,
-    }
-    headers: Dict[str, str] = {}
-    if OPENROUTER_SITE_URL:
-        headers["HTTP-Referer"] = OPENROUTER_SITE_URL
-    if OPENROUTER_APP_NAME:
-        headers["X-Title"] = OPENROUTER_APP_NAME
-    if headers:
+    provider_config = _get_provider_config(normalized)
+    api_key = _require_api_key(provider_config)
+    client_kwargs: Dict[str, Any] = {"api_key": api_key}
+    api_base = provider_config.get("api_base")
+    if isinstance(api_base, str) and api_base.strip():
+        client_kwargs["base_url"] = api_base.strip()
+    headers = provider_config.get("default_headers")
+    if isinstance(headers, dict) and headers:
         client_kwargs["default_headers"] = headers
-    _client = OpenAI(**client_kwargs)
-    return _client
+    client = OpenAI(**client_kwargs)
+    _clients[normalized] = client
+    return client
 
 
-def _client_supports_response_format(client: OpenAI) -> bool:
-    global _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT
-    if _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT is not None:
-        return _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT
-    supports = False
+def _client_supports_response_format(client: OpenAI, provider_name: str) -> bool:
+    normalized = _normalize_provider_id(provider_name)
+    if not normalized:
+        return False
+    if normalized in _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT:
+        return _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT[normalized]
     try:
         signature = inspect.signature(client.responses.create)
+        supports = "response_format" in signature.parameters
     except (AttributeError, ValueError, TypeError):
         supports = False
-    else:
-        supports = "response_format" in signature.parameters
-    _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT = supports
+    _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT[normalized] = supports
     return supports
 
 
@@ -882,8 +921,10 @@ def _perform_responses_request(
     client: OpenAI,
     request_kwargs: Dict[str, Any],
     native_response_format_support: bool,
+    provider_config: Dict[str, Any],
+    api_key: str,
 ) -> Response:
-    if USE_DIRECT_OPENAI or native_response_format_support:
+    if native_response_format_support:
         return client.responses.create(**request_kwargs)
 
     payload = copy.deepcopy(request_kwargs)
@@ -891,32 +932,27 @@ def _perform_responses_request(
     if isinstance(extra_body, dict):
         payload.update(extra_body)
 
-    if not OPENROUTER_API_KEY:
-        raise AgentRunnerError(
-            "Chybí proměnná prostředí OPENROUTER_API_KEY – nelze odeslat požadavek s response_format."
-        )
+    api_base = str(provider_config.get("api_base") or "").rstrip("/")
+    if not api_base:
+        raise AgentRunnerError("Provider nemá nastavené 'api_base' pro Responses API.")
 
-    url = OPENROUTER_BASE_URL.rstrip("/") + "/responses"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    if OPENROUTER_SITE_URL:
-        headers["HTTP-Referer"] = OPENROUTER_SITE_URL
-    if OPENROUTER_APP_NAME:
-        headers["X-Title"] = OPENROUTER_APP_NAME
+    url = api_base + "/responses"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    default_headers = provider_config.get("default_headers")
+    if isinstance(default_headers, dict):
+        headers.update(default_headers)
 
     response = requests.post(url, headers=headers, json=payload, timeout=90)
     try:
         response.raise_for_status()
     except requests.HTTPError as exc:
         raise AgentRunnerError(
-            f"OpenRouter responses API vrátil chybu {response.status_code}: {response.text}"
+            f"Responses API vrátilo chybu {response.status_code}: {response.text}"
         ) from exc
     try:
         payload = response.json()
     except ValueError as exc:
-        raise AgentRunnerError("OpenRouter vrátil neplatný JSON.") from exc
+        raise AgentRunnerError("Responses API vrátilo neplatný JSON.") from exc
     return _DictResponse(payload)
 
 
@@ -1254,13 +1290,27 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         if agent.get("model")
         else DEFAULT_MODEL
     )
+    upstream_model_id = _get_upstream_model_id(model)
     if collection == "readers" and not _model_supports_scan(model):
         raise AgentRunnerError(f"Model {model} nepodporuje čtení ze skenu – vyberte jiný model.")
     if collection != "readers" and not _model_supports_text(model):
         raise AgentRunnerError(f"Model {model} není povolený pro textové agenty.")
 
-    client = _get_client()
-    native_response_format_support = _client_supports_response_format(client)
+    model_definition = MODEL_DEFINITION_MAP.get(_normalize_model_id(model)) or {}
+    provider_name = model_definition.get("provider") or "openrouter"
+    provider_config = _get_provider_config(provider_name)
+    provider_supports_responses = bool(provider_config.get("supports_responses", False))
+    provider_supports_chat = bool(provider_config.get("supports_chat", False))
+    if collection == "readers" and not provider_supports_chat:
+        raise AgentRunnerError(f"Provider {provider_name} nepodporuje chat completions – vyberte jiný model.")
+    if collection != "readers" and not (provider_supports_responses or provider_supports_chat):
+        raise AgentRunnerError(f"Provider {provider_name} nepodporuje ani Responses ani Chat API pro textové agenty.")
+
+    api_key = _require_api_key(provider_config)
+    client = _get_client(provider_name)
+    native_response_format_support = (
+        _client_supports_response_format(client, provider_name) if provider_supports_responses else False
+    )
 
     capabilities = _get_model_capabilities(model)
     effective_settings = _get_effective_settings(agent, model)
@@ -1311,10 +1361,13 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
             response_format = _normalize_response_format(effective_settings.get("response_format"))
         expected_response_format = response_format if response_format is not None else None
 
+    use_responses_api = collection != "readers" and provider_supports_responses
+    use_chat_api = collection == "readers" or not use_responses_api
+
     request_kwargs: Dict[str, Any] = {}
-    if collection != "readers":
+    if use_responses_api:
         request_kwargs = {
-            "model": model,
+            "model": upstream_model_id,
             "input": [
                 {
                     "role": "system",
@@ -1326,7 +1379,6 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
                 },
             ],
         }
-    if collection != "readers":
         if supports_temperature and temperature is not None:
             request_kwargs["temperature"] = _clamp_float(
                 temperature,
@@ -1351,7 +1403,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         if ENABLE_RESPONSE_FORMAT and response_format is not None:
             if supports_response_format:
                 request_kwargs["response_format"] = response_format
-                if not native_response_format_support and not USE_DIRECT_OPENAI:
+                if not native_response_format_support:
                     print("[AgentDebug] Klient nepodporuje response_format nativně – požadavek pošlu přímo přes REST.")
             else:
                 print(f"[AgentDebug] Model {model} ignoruje parametr response_format – nebude odeslán.")
@@ -1359,7 +1411,8 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
             request_kwargs["max_output_tokens"] = int(max_output_tokens)
 
         debug_agent = agent.get("name") or agent.get("display_name") or "unknown"
-        print("\n=== [AgentDebug] OpenAI Request ===")
+        print("\n=== [AgentDebug] Responses API Request ===")
+        print(f"Provider: {provider_name}")
         print(f"Agent: {debug_agent}")
         print(f"Model: {request_kwargs.get('model')}")
         if "temperature" in request_kwargs:
@@ -1393,8 +1446,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
                 print("[AgentDebug] Klient nepodporuje parametr response_format – opakuji bez něj.")
                 request_kwargs.pop("response_format", None)
                 removed_any = True
-                global _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT
-                _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT = False
+                _CLIENT_SUPPORTS_NATIVE_RESPONSE_FORMAT[provider_name] = False
             if BadRequestError is None or not isinstance(error, BadRequestError):
                 if not removed_any:
                     return None
@@ -1423,11 +1475,23 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
                     removed_any = True
             if not removed_any:
                 return None
-            updated_support = _client_supports_response_format(client) if ENABLE_RESPONSE_FORMAT else False
-            return _perform_responses_request(client, request_kwargs, updated_support)
+            updated_support = _client_supports_response_format(client, provider_name) if ENABLE_RESPONSE_FORMAT else False
+            return _perform_responses_request(
+                client,
+                request_kwargs,
+                updated_support,
+                provider_config,
+                api_key,
+            )
 
         try:
-            response = _perform_responses_request(client, request_kwargs, native_response_format_support)
+            response = _perform_responses_request(
+                client,
+                request_kwargs,
+                native_response_format_support,
+                provider_config,
+                api_key,
+            )
         except Exception as exc:
             retry = _retry_without_unsupported(exc)
             if retry is None:
@@ -1439,7 +1503,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         except AttributeError:
             response_dict = getattr(response, "__dict__", {})
 
-        print("=== [AgentDebug] OpenAI Response ===")
+        print("=== [AgentDebug] Responses API Response ===")
         try:
             print(response.output_text)
         except Exception:
@@ -1454,16 +1518,59 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         stop_reason = _extract_stop_reason(response_dict)
         usage = _extract_usage(response_dict)
     else:
-        chat_content = (reader_inputs or {}).get("chat_content") or []
-        response = _run_reader_chat_completion(
-            client,
-            model,
-            prompt,
-            chat_content,
-            temperature if supports_temperature else None,
-            top_p if supports_top_p else None,
-            max_output_tokens,
-        )
+        if collection == "readers":
+            chat_content = (reader_inputs or {}).get("chat_content") or []
+            response = _run_reader_chat_completion(
+                client,
+                upstream_model_id,
+                prompt,
+                chat_content,
+                temperature if supports_temperature else None,
+                top_p if supports_top_p else None,
+                max_output_tokens,
+            )
+        else:
+            messages = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_payload or json.dumps(document_payload, ensure_ascii=False)},
+            ]
+            chat_kwargs: Dict[str, Any] = {"model": upstream_model_id, "messages": messages}
+            if supports_temperature and temperature is not None:
+                chat_kwargs["temperature"] = _clamp_float(
+                    temperature,
+                    0.0,
+                    2.0,
+                    effective_settings.get("temperature", 0.0),
+                )
+            if supports_top_p and top_p is not None:
+                chat_kwargs["top_p"] = _clamp_float(
+                    top_p,
+                    0.0,
+                    1.0,
+                    effective_settings.get("top_p", 1.0),
+                )
+            if max_output_tokens is not None:
+                chat_kwargs["max_tokens"] = int(max_output_tokens)
+            if supports_reasoning:
+                chat_kwargs["reasoning"] = {"effort": normalized_reasoning_effort}
+                agent["reasoning_effort"] = normalized_reasoning_effort
+            print("\n=== [AgentDebug] Chat Completions Request ===")
+            print(f"Provider: {provider_name}")
+            print(f"Model: {model}")
+            if "temperature" in chat_kwargs:
+                print(f"Temperature: {chat_kwargs['temperature']}")
+            if "top_p" in chat_kwargs:
+                print(f"Top P: {chat_kwargs['top_p']}")
+            if "reasoning" in chat_kwargs:
+                print(f"Reasoning effort: {chat_kwargs['reasoning'].get('effort')}")
+            if "max_tokens" in chat_kwargs:
+                print(f"Max tokens: {chat_kwargs['max_tokens']}")
+            print("--- Prompt ---")
+            print(f"[system] {prompt}")
+            print(f"[user] {chat_kwargs['messages'][1].get('content')}")
+            print("=== [AgentDebug] End Chat Request ===\n")
+            response = client.chat.completions.create(**chat_kwargs)
+
         try:
             response_dict = response.model_dump()
         except AttributeError:
@@ -1479,7 +1586,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         print("=== [AgentDebug] End Chat Response ===\n")
         text = _extract_chat_output_text(response)
         raw_model_output = text
-        stop_reason = None
+        stop_reason = _extract_stop_reason(response_dict) if isinstance(response_dict, dict) else None
         usage = response_dict.get("usage") if isinstance(response_dict, dict) else None
     diff_applied = False
     diff_changes = None
@@ -1545,7 +1652,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "text": text,
         "response_id": response_dict.get("id") or getattr(response, "id", None),
-        "model": response_dict.get("model") or model,
+        "model": response_dict.get("model") or upstream_model_id,
         "stop_reason": stop_reason,
         "usage": usage,
         "input_document": document_payload,

@@ -4,7 +4,7 @@
   "prompt": "Dostaneš text stránky. Každý odstavec stručně shrň do jedné věty. Výstup vrať jako prostý text, každý řádek = shrnutí jednoho odstavce, bez HTML, bez JSON.",
   "temperature": 0.3,
   "top_p": 1.0,
-  "model": "google/gemini-2.5-flash",
+  "model": "openrouter/google/gemini-2.5-flash",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,11 +13,11 @@
       "reasoning_effort": "low"
     },
     "per_model": {
-      "openai/gpt-4.1-mini": {
+      "openrouter/openai/gpt-4.1-mini": {
         "temperature": 0.3,
         "top_p": 1.0
       },
-      "google/gemini-2.5-flash": {
+      "openrouter/google/gemini-2.5-flash": {
         "temperature": 0.3,
         "top_p": 1.0
       }

@@ -4,7 +4,7 @@
   "prompt": "Jsi rychlý a přesný asistent pro napojování textu mezi stránkami.\nDostaneš JSON se sekcemi “start” a “end”, které obsahují text z konce jedné stránky a začátku následující.\nTvým úkolem je rozhodnout, zda tyto části patří do jednoho souvislého odstavce nebo věty.\n\nOdpověz pouze jedním číslem bez jakéhokoli dalšího textu:\n0 – bloky k sobě nepatří, zůstávají oddělené (např. konec a začátek dvou různých odstavců),\n1 – bloky tvoří souvislý odstavec nebo větu, mají být spojeny mezerou,\n2 – rozdělení nastalo uprostřed slova (např. „Dale -“ a „ko za lesy…“).\n\nNepřidávej žádné vysvětlení, komentář ani jiný text.\nOdpověz pouze číslem 0, 1 nebo 2.",
   "temperature": 0.2,
   "top_p": 1.0,
-  "model": "openai/gpt-4o-mini",
+  "model": "openai/openai/gpt-4o-mini",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,11 +13,11 @@
       "reasoning_effort": "low"
     },
     "per_model": {
-      "openai/gpt-4.1-mini": {
+      "openrouter/openai/gpt-4.1-mini": {
         "temperature": 0.1,
         "top_p": 1.0
       },
-      "openai/gpt-4o-mini": {
+      "openai/openai/gpt-4o-mini": {
         "temperature": 0.2,
         "top_p": 1.0
       }

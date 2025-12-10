@@ -4,7 +4,7 @@
   "prompt": "Jsi pečlivý korektor češtiny. Dostaneš JSON s klíči \"language_hint\" a \"blocks\". Blocks je pole objektů {id, type, text}. Oprav překlepy a zjevné OCR chyby pouze v hodnotách \"text\". Nesjednocuj styl, neměň typy bloků ani jejich pořadí. Zachovej diakritiku, pokud lze. Odpovídej pouze validním JSON se stejnou strukturou a klíči jako vstup.",
   "temperature": 0.2,
   "top_p": 1.0,
-  "model": "openai/gpt-4.1-mini",
+  "model": "openrouter/openai/gpt-4.1-mini",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,7 +13,7 @@
       "reasoning_effort": "low"
     },
     "per_model": {
-      "openai/gpt-4.1-mini": {
+      "openrouter/openai/gpt-4.1-mini": {
         "temperature": 0.2,
         "top_p": 1.0
       }

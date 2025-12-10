@@ -4247,7 +4247,7 @@ class ComparisonHandler(http.server.BaseHTTPRequestHandler):
             if (definition && definition.capabilities) {
                 return Boolean(definition.capabilities.reasoning);
             }
-            const normalized = normalizeModelId(model);
+            const normalized = normalizeModelId(getUpstreamModelId(model));
             if (!normalized) return false;
             for (const prefix of FALLBACK_REASONING_PREFIXES) {
                 const lowered = prefix.toLowerCase();
@@ -4264,6 +4264,14 @@ class ComparisonHandler(http.server.BaseHTTPRequestHandler):
                 return null;
             }
             return MODEL_REGISTRY_MAP.get(normalized) || null;
+        }
+
+        function getUpstreamModelId(modelId) {
+            const definition = getModelDefinition(modelId);
+            if (definition && typeof definition.upstream_id === 'string' && definition.upstream_id.trim().length) {
+                return definition.upstream_id;
+            }
+            return modelId;
         }
 
         function getModelUsageFlags(modelId) {

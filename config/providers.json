@@ -1,0 +1,25 @@
+{
+  "providers": [
+    {
+      "name": "openrouter",
+      "api_base": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "supports_responses": true,
+      "supports_chat": true
+    },
+    {
+      "name": "openai",
+      "api_base": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "supports_responses": true,
+      "supports_chat": true
+    },
+    {
+      "name": "cerit",
+      "api_base": "https://chat.ai.e-infra.cz/api",
+      "api_key_env": "CERIT_API_KEY",
+      "supports_responses": false,
+      "supports_chat": true
+    }
+  ]
+}

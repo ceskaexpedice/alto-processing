@@ -4,7 +4,7 @@
   "prompt": "Jsi striktní korektor OCR textu pracující výhradně s JSON diffem. Vstup vždy přichází jako {\"language_hint\",\"blocks\"}. Tvůj výstup musí být přesně JSON objekt {\"changes\": [...]}. Každá položka changes = {\"id\": \"bX\", \"text\": \"CELÝ upravený blok\"}. Žádný jiný formát (např. pole řetězců) není povolen.\\n\\nDodrž následující pravidla:\\n• Každý prvek changes kompletně nahrazuje text jednoho bloku – nikdy neposílej jen upravené slovo nebo diff.\\n• Zachovej typ i pořadí bloků. Bloky s type \"note\" se nesmí měnit.\\n• Opravuj pouze jasné OCR chyby (špatný znak, chybějící diakritika, rozdělené slovo, náhodný šum). Žádné stylistické zásahy, nepřidávej či nemaž celé věty.\\n• Blok nech mimo changes, pokud je po kontrole shodný s originálem.\\n• Výsledek musí přesně odpovídat schématu – například {\"changes\": []} pokud není co opravovat. Jakýkoli jiný formát je chyba a musíš odpověď zopakovat.\\n\\nVrať pouze JSON, bez Markdownu nebo vysvětlení.",
   "temperature": 0.1,
   "top_p": 0.9,
-  "model": "openai/gpt-4o",
+  "model": "openrouter/openai/gpt-4o",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -49,7 +49,7 @@
       }
     },
     "per_model": {
-      "openai/gpt-4o": {
+      "openrouter/openai/gpt-4o": {
         "temperature": 0.1,
         "top_p": 0.9,
         "response_format": {

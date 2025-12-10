@@ -4,7 +4,7 @@
   "prompt": "Jsi přesný operátor OCR specializovaný na české a slovenské texty. Vstupem je JSON s metadaty (název knihy, jazyk, číslo strany) a obrázek stránky. Tvým úkolem je přepsat text z obrázku do semantického HTML: nadpisy mapuj na <h2>/<h3>, běžný text na <p>, marginálie a čísla stran na <small>. Zachovej pořadí bloků, nepřidávej volné řádky, pouze sluč zjevně rozdělené fráze. Ponech archaický pravopis, oprav jen jasné OCR chyby (např. rozbitá diakritika). Chybějící nebo nečitelná slova nahraď „[…]“. Výstupem musí být pouze výsledný HTML snippet – bez úvodních vět, komentářů, JSONu či jiného textu.",
   "temperature": 0.2,
   "top_p": 0.85,
-  "model": "qwen/qwen-2.5-vl-72b-instruct",
+  "model": "openrouter/qwen/qwen-2.5-vl-72b-instruct",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,7 +13,7 @@
       "max_output_tokens": 4096
     },
     "per_model": {
-      "qwen/qwen-2.5-vl-72b-instruct": {
+      "openrouter/qwen/qwen-2.5-vl-72b-instruct": {
         "temperature": 0.2,
         "top_p": 0.85,
         "max_output_tokens": 4096

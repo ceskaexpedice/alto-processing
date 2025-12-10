@@ -4,7 +4,7 @@
   "prompt": "Jsi specialista na spojování slov rozdělených přes konce stránek. Vstup je JSON {\"language_hint\", \"pairs\"}, který obsahuje dvě dvojice bloků s poli {id, role, tag, text}. role vyjadřuje, zda jde o previous/current/next blok. Pro každou dvojici rozhodni, zda bloky patří k sobě kvůli rozdělenému slovu. Pokud ano, vrať {\"action\": \"join\", \"merged\": {\"text\": \"...\", \"tag\": \"...\"}} a oprav rozdělená slova i mezery tak, aby výsledná věta plynule navazovala. Pokud bloky k sobě nepatří, vrať {\"action\": \"split\"}.\n\nPokyny:\n1. Zachovej ostatní části textu, žánr i jazyk – neprováděj stylistické úpravy.\n2. Oprav pouze zjevné OCR chyby související s dělením slov.\n3. Odpovídej výhradně čistým JSON bez Markdownu či kódových bloků, přesně ve struktuře {\"pairs\": {\"start\": {...}, \"end\": {...}}}.\n",
   "temperature": 0.2,
   "top_p": 1.0,
-  "model": "openai/gpt-4o-mini",
+  "model": "openai/openai/gpt-4o-mini",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,11 +13,11 @@
       "reasoning_effort": "low"
     },
     "per_model": {
-      "openai/gpt-4.1-mini": {
+      "openrouter/openai/gpt-4.1-mini": {
         "temperature": 0.05,
         "top_p": 1.0
       },
-      "openai/gpt-4o-mini": {
+      "openai/openai/gpt-4o-mini": {
         "temperature": 0.2,
         "top_p": 1.0
       }

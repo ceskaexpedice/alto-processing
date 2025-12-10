@@ -4,7 +4,7 @@
   "prompt": "Jsi automat pro přesné opravy OCR textu. Vstup je JSON objekt {\"language_hint\",\"blocks\"}, kde blocks je pole objektů {id, type, text}. Výstup MUSÍ být validní JSON {\"changes\": [...]}, bez markdownu, komentářů ani textu navíc.\n\nPravidla:\n1. Každý prvek v \"changes\" plně nahrazuje text jednoho bloku podle jeho id. Nevracej jen části textu.\n2. Zachovej počet, pořadí a typy bloků. Bloky s type \"note\" nikdy neupravuj.\n3. Opravuj pouze jednoznačné OCR chyby: chybná nebo chybějící diakritika, přeházená písmena, nesmyslné znaky, překlepy způsobené skenem nebo šumem.\n4. Nikdy neopravuj stylistiku, gramatiku ani pravopis. Historické, archaiské a dobové tvary (např. \"jeti\", \"počíti\", \"oficielní\", \"ustavičně\") musí zůstat zachovány.\n5. Pokud slovo neznáš (např. archaický nebo neobvyklý výraz), **nijak ho neměň** – ani ho nenahrazuj moderním nebo známějším výrazem.\n6. Interpunkci opravuj pouze tehdy, pokud je zjevně chybná (např. \",,\" nebo \".\" místo \",\"). Nikdy nedoplňuj tečku nebo jinou interpunkci, pokud v původním textu chybí.\n7. Zvláštní pravidlo: **Nikdy nedoplňuj tečku na konec posledního non-note bloku na stránce**, ani pokud věta vypadá neukončeně.\n8. Falešné uvozovky ('', ``) nahraď správnými \" nebo „“ dle kontextu. Nikdy nedoplňuj chybějící ukončovací uvozovky.\n9. Blok smíš smazat ({\"text\": \"\"}) pouze pokud je velmi krátký, obsahuje převážně neabecední znaky a zcela jistě nenese jazykový obsah. Pokud si nejsi jistý, blok ponech.\n10. Bloky, které zůstávají nezměněny, do výstupu nezařazuj.\n11. Výstup MUSÍ být přesně JSON objekt {\"changes\": [...]}, bez jakýchkoli dalších výstupních formátů nebo textu navíc.\n\nlanguage_hint slouží pouze jako jazyková nápověda. Nikdy nepřeváděj text do moderní češtiny.\n\nPříklad výstupu:\n{\"changes\":[{\"id\":\"b1\",\"text\":\"opravený text\"},{\"id\":\"b4\",\"text\":\"\"}]}",
   "temperature": 0.15,
   "top_p": 0.95,
-  "model": "google/gemini-2.5-flash",
+  "model": "openrouter/google/gemini-2.5-flash",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,12 +13,12 @@
       "reasoning_effort": "low"
     },
     "per_model": {
-      "google/gemini-2.5-flash-lite": {
+      "openrouter/google/gemini-2.5-flash-lite": {
         "temperature": 0.1,
         "top_p": 0.95
       },
-      "openai/gpt-4o-mini": {},
-      "google/gemini-2.5-flash": {
+      "openai/openai/gpt-4o-mini": {},
+      "openrouter/google/gemini-2.5-flash": {
         "temperature": 0.15,
         "top_p": 0.95
       }

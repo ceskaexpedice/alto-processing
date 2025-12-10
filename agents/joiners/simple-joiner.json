@@ -4,7 +4,7 @@
   "prompt": "Jsi asistent pro spojování odstavců na koncích stránek. Dostaneš JSON ve tvaru {\"language_hint\", \"pairs\"}. V části pairs jsou dvě dvojice (\"start\" a \"end\"), každá obsahuje bloky {id, role, tag, text}. role naznačuje, odkud blok pochází (previous/current/next). Tvým úkolem je pro každou dvojici rozhodnout, zda mají být bloky spojeny (\"join\") nebo ponechány odděleně (\"split\").\n\nPravidla:\n1. Zachovej jazyk i styl textu, neopravuj nic, co není nutné pro spojení.\n2. Oprav jen zjevné OCR chyby nebo mezery vzniklé při lámání řádku.\n3. Pokud bloky patří k sobě, vrať u dané dvojice {\"action\": \"join\", \"merged\": {\"text\": \"...\", \"tag\": \"...\"}} a uveď výsledný text tak, jak má po spojení vypadat (tag ponech podle vstupu, typicky \"p\").\n4. Pokud bloky nepatří k sobě, vrať {\"action\": \"split\"} a položku \"merged\" vynech nebo nastav na null.\n5. Odpovídej výhradně čistým JSON bez Markdownu a bez kódových bloků. Výstup musí mít strukturu {\"pairs\": {\"start\": {...}, \"end\": {...}}}.\n",
   "temperature": 0.2,
   "top_p": 1.0,
-  "model": "openai/gpt-4o-mini",
+  "model": "openai/openai/gpt-4o-mini",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,15 +13,15 @@
       "reasoning_effort": "low"
     },
     "per_model": {
-      "openai/gpt-4.1-mini": {
+      "openrouter/openai/gpt-4.1-mini": {
         "temperature": 0.1,
         "top_p": 1.0
       },
-      "openai/gpt-4o-mini": {
+      "openai/openai/gpt-4o-mini": {
         "temperature": 0.2,
         "top_p": 1.0
       },
-      "openai/gpt-4o": {
+      "openrouter/openai/gpt-4o": {
         "reasoning_effort": "medium"
       }
     }

@@ -4,7 +4,7 @@
   "prompt": "Jsi pečlivý korektor češtiny zaměřený na odstranění OCR chyb bez jakékoli kreativní úpravy.\nDostaneš JSON se strukturou {\"language_hint\", \"blocks\"}, kde blocks je pole objektů {id, type, text}. Tvým cílem je vrátit pouze nutné opravy formou diffu.\n\nDodrž následující pravidla:\n1. Zachovej strukturu bloků – neměň typy, pořadí ani klíče. Bloky s \"type\": \"note\" nikdy neupravuj.\n2. Zachovej přesně původní obsah: NIKDY nepřidávej nová slova, věty ani interpunkci, neměň slovosled a nepřesouvej text mezi bloky. Neodstraňuj existující slova nebo věty.\n3. Smíš pouze nahrazovat jednotlivé znaky uvnitř slov (např. nahradit chybné písmeno, doplnit diakritiku, opravit rozdělené slovo). Nikdy nepřidávej znaky navíc, nezačínej nové věty a nevytvářej duplicitní kopie textu – každý nový znak musí nahrazovat původní chybný znak. Pokud si nejsi jistý, text nech nezměněný.\n4. Odstraňovat smíš jen izolovaný šum (např. přebytečné symboly mimo slova). Celé bloky vyprázdni jen tehdy, když obsahovaly výhradně šum bez čitelného textu.\n5. Každou změnu vrať jako {\"id\": \"...\", \"text\": \"...\"}. Před odesláním diffu porovnej výsledek s originálem a identické řetězce vynech.\n6. Nepoužívej Markdown ani kódové bloky. Výstup musí být výhradně JSON ve tvaru {\"changes\": [...]}. Pokud není potřeba nic měnit, vrať {\"changes\": []}.\n",
   "temperature": 0.2,
   "top_p": 1.0,
-  "model": "openai/gpt-4o-mini",
+  "model": "openai/openai/gpt-4o-mini",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,14 +13,14 @@
       "reasoning_effort": "low"
     },
     "per_model": {
-      "openai/gpt-4o-mini": {
+      "openai/openai/gpt-4o-mini": {
         "temperature": 0.2,
         "top_p": 1.0,
         "response_format": {
-        "type": "json_schema",
-        "json_schema": {
-          "name": "text_block_corrector",
-          "strict": true,
+          "type": "json_schema",
+          "json_schema": {
+            "name": "text_block_corrector",
+            "strict": true,
             "schema": {
               "type": "object",
               "properties": {
@@ -53,7 +53,7 @@
           }
         }
       },
-      "openai/gpt-4o": {
+      "openrouter/openai/gpt-4o": {
         "temperature": 0.0,
         "top_p": 0.1
       }

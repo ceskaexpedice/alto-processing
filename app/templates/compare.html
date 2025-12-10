@@ -1654,8 +1654,16 @@
                             <textarea id="agent-prompt" rows="6" style="width:100%;font-family:monospace;">Zadejte prompt...</textarea>
                         </div>
                         <div class="form-group">
-                            <label for="agent-default-model">Model</label>
-                            <select id="agent-default-model" aria-label="Vyberte model pro agenta" style="min-width:170px;"></select>
+                            <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+                                <div>
+                                    <label for="agent-provider-filter">Provider</label>
+                                    <select id="agent-provider-filter" aria-label="Vyberte providera pro agenta" style="min-width:140px;"></select>
+                                </div>
+                                <div>
+                                    <label for="agent-default-model">Model</label>
+                                    <select id="agent-default-model" aria-label="Vyberte model pro agenta" style="min-width:170px;"></select>
+                                </div>
+                            </div>
                         </div>
                         <div id="agent-parameter-fields" class="form-group" style="margin-top:8px;"></div>
                         <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center;">
@@ -1724,8 +1732,16 @@
                             <textarea id="reader-agent-prompt" rows="6" style="width:100%;font-family:monospace;">Zadejte prompt...</textarea>
                         </div>
                         <div class="form-group">
-                            <label for="reader-agent-default-model">Model</label>
-                            <select id="reader-agent-default-model" aria-label="Vyberte model pro čtení" style="min-width:170px;"></select>
+                            <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+                                <div>
+                                    <label for="reader-agent-provider-filter">Provider</label>
+                                    <select id="reader-agent-provider-filter" aria-label="Vyberte providera pro čtení" style="min-width:140px;"></select>
+                                </div>
+                                <div>
+                                    <label for="reader-agent-default-model">Model</label>
+                                    <select id="reader-agent-default-model" aria-label="Vyberte model pro čtení" style="min-width:170px;"></select>
+                                </div>
+                            </div>
                         </div>
                         <div id="reader-agent-parameter-fields" class="form-group" style="margin-top:8px;"></div>
                         <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center;">
@@ -1861,8 +1877,16 @@
                             <textarea id="stitch-agent-prompt" rows="6" style="width:100%;font-family:monospace;">Zadejte prompt...</textarea>
                         </div>
                         <div class="form-group">
-                            <label for="stitch-agent-default-model">Model</label>
-                            <select id="stitch-agent-default-model" aria-label="Vyberte model pro napojovacího agenta" style="min-width:170px;"></select>
+                            <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+                                <div>
+                                    <label for="stitch-agent-provider-filter">Provider</label>
+                                    <select id="stitch-agent-provider-filter" aria-label="Vyberte providera pro napojovacího agenta" style="min-width:140px;"></select>
+                                </div>
+                                <div>
+                                    <label for="stitch-agent-default-model">Model</label>
+                                    <select id="stitch-agent-default-model" aria-label="Vyberte model pro napojovacího agenta" style="min-width:170px;"></select>
+                                </div>
+                            </div>
                         </div>
                         <div id="stitch-agent-parameter-fields" class="form-group" style="margin-top:8px;"></div>
                         <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center;">
@@ -1978,8 +2002,16 @@
                             <textarea id="custom-agent-prompt" rows="6" style="width:100%;font-family:monospace;">Zadejte prompt...</textarea>
                         </div>
                         <div class="form-group">
-                            <label for="custom-agent-default-model">Model</label>
-                            <select id="custom-agent-default-model" aria-label="Vyberte model pro custom LMM" style="min-width:170px;"></select>
+                            <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+                                <div>
+                                    <label for="custom-agent-provider-filter">Provider</label>
+                                    <select id="custom-agent-provider-filter" aria-label="Vyberte providera pro custom LMM" style="min-width:140px;"></select>
+                                </div>
+                                <div>
+                                    <label for="custom-agent-default-model">Model</label>
+                                    <select id="custom-agent-default-model" aria-label="Vyberte model pro custom LMM" style="min-width:170px;"></select>
+                                </div>
+                            </div>
                         </div>
                         <div id="custom-agent-parameter-fields" class="form-group" style="margin-top:8px;"></div>
                         <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;align-items:center;">
@@ -2177,6 +2209,7 @@
                 requiresPythonHtml: config.requiresPythonHtml !== false,
                 runButtonLabel: config.runButtonLabel || 'Spustit',
                 defaultAgentName: config.defaultAgentName || '',
+                providerSelectId: config.providerSelectId || null,
                 agentsCache: {},
                 agentFingerprintCache: new Map(),
                 agentResultCache: new Map(),
@@ -2202,6 +2235,7 @@
                 nameInputId: 'agent-name',
                 promptTextareaId: 'agent-prompt',
                 modelSelectId: 'agent-default-model',
+                providerSelectId: 'agent-provider-filter',
                 parameterFieldsId: 'agent-parameter-fields',
                 saveButtonId: 'agent-save',
                 deleteButtonId: 'agent-delete',
@@ -2233,6 +2267,7 @@
                 nameInputId: 'custom-agent-name',
                 promptTextareaId: 'custom-agent-prompt',
                 modelSelectId: 'custom-agent-default-model',
+                providerSelectId: 'custom-agent-provider-filter',
                 parameterFieldsId: 'custom-agent-parameter-fields',
                 saveButtonId: 'custom-agent-save',
                 deleteButtonId: 'custom-agent-delete',
@@ -2263,6 +2298,7 @@
                 nameInputId: 'reader-agent-name',
                 promptTextareaId: 'reader-agent-prompt',
                 modelSelectId: 'reader-agent-default-model',
+                providerSelectId: 'reader-agent-provider-filter',
                 parameterFieldsId: 'reader-agent-parameter-fields',
                 saveButtonId: 'reader-agent-save',
                 deleteButtonId: 'reader-agent-delete',
@@ -2290,6 +2326,7 @@
                 nameInputId: 'stitch-agent-name',
                 promptTextareaId: 'stitch-agent-prompt',
                 modelSelectId: 'stitch-agent-default-model',
+                providerSelectId: 'stitch-agent-provider-filter',
                 parameterFieldsId: 'stitch-agent-parameter-fields',
                 saveButtonId: 'stitch-agent-save',
                 deleteButtonId: 'stitch-agent-delete',
@@ -3570,7 +3607,7 @@
             if (definition && definition.capabilities) {
                 return Boolean(definition.capabilities.reasoning);
             }
-            const normalized = normalizeModelId(model);
+            const normalized = normalizeModelId(getUpstreamModelId(model));
             if (!normalized) return false;
             for (const prefix of FALLBACK_REASONING_PREFIXES) {
                 const lowered = prefix.toLowerCase();
@@ -3587,6 +3624,14 @@
                 return null;
             }
             return MODEL_REGISTRY_MAP.get(normalized) || null;
+        }
+
+        function getUpstreamModelId(modelId) {
+            const definition = getModelDefinition(modelId);
+            if (definition && typeof definition.upstream_id === 'string' && definition.upstream_id.trim().length) {
+                return definition.upstream_id;
+            }
+            return modelId;
         }
 
         function getModelUsageFlags(modelId) {
@@ -3613,6 +3658,29 @@
                 return filtered;
             }
             return AVAILABLE_AGENT_MODELS.slice();
+        }
+
+        function getProviderOptionsForCollection(collection) {
+            const providers = new Set();
+            getAllowedModelsForCollection(collection).forEach((modelId) => {
+                const definition = getModelDefinition(modelId);
+                if (definition && definition.provider) {
+                    providers.add(String(definition.provider).trim());
+                }
+            });
+            // fallback: use all providers from registry if none collected
+            if (!providers.size) {
+                (MODEL_REGISTRY_MODELS || []).forEach((entry) => {
+                    if (entry && entry.provider) {
+                        providers.add(String(entry.provider).trim());
+                    }
+                });
+            }
+            if (!providers.size) {
+                // hard fallback – all known providers
+                return ['all', 'openai', 'openrouter', 'cerit'];
+            }
+            return ['all', ...Array.from(providers).sort((a, b) => a.localeCompare(b))];
         }
 
         function getDefaultModelForCollection(collection) {
@@ -3950,6 +4018,7 @@
 
         function renderAgentModelOptions(ctx, selectedModel) {
             const selectEl = getContextElement(ctx, 'modelSelectId');
+            const providerEl = getContextElement(ctx, 'providerSelectId');
             if (!selectEl) {
                 return;
             }
@@ -3976,9 +4045,16 @@
                 selectEl.disabled = true;
                 return;
             }
+            const providerFilter = providerEl ? String(providerEl.value || 'all').trim().toLowerCase() : 'all';
+            const filteredOptions = modelOptions.filter((modelId) => {
+                if (providerFilter === 'all') return true;
+                const def = getModelDefinition(modelId);
+                return def && typeof def.provider === 'string' && def.provider.trim().toLowerCase() === providerFilter;
+            });
+            const optionsToUse = filteredOptions.length ? filteredOptions : modelOptions;
             selectEl.disabled = false;
             selectEl.innerHTML = '';
-            modelOptions.forEach((modelId) => {
+            optionsToUse.forEach((modelId) => {
                 const option = document.createElement('option');
                 option.value = modelId;
                 const definition = getModelDefinition(modelId);
@@ -3987,12 +4063,41 @@
                     : modelId;
                 selectEl.appendChild(option);
             });
-            const normalized = (selectedModel && modelOptions.includes(selectedModel))
+            const normalized = (selectedModel && optionsToUse.includes(selectedModel))
                 ? selectedModel
-                : modelOptions[0];
+                : optionsToUse[0];
             selectEl.value = normalized;
             if (ctx.currentAgentDraft) {
                 ctx.currentAgentDraft.model = normalized;
+            }
+        }
+
+        function renderAgentProviderOptions(ctx) {
+            const providerEl = getContextElement(ctx, 'providerSelectId');
+            if (!providerEl) return;
+            const providers = getProviderOptionsForCollection(ctx.collection);
+            const current = providerEl.value || 'all';
+            providerEl.innerHTML = '';
+            providers.forEach((prov) => {
+                const opt = document.createElement('option');
+                opt.value = prov;
+                if (prov === 'all') {
+                    opt.textContent = 'All';
+                } else if (prov.toLowerCase() === 'openai') {
+                    opt.textContent = 'OpenAI';
+                } else if (prov.toLowerCase() === 'openrouter') {
+                    opt.textContent = 'OpenRouter';
+                } else if (prov.toLowerCase() === 'cerit') {
+                    opt.textContent = 'CERIT';
+                } else {
+                    opt.textContent = prov;
+                }
+                providerEl.appendChild(opt);
+            });
+            if (!providers.includes(current)) {
+                providerEl.value = 'all';
+            } else {
+                providerEl.value = current;
             }
         }
 
@@ -4667,6 +4772,7 @@
             const nameEl = getContextElement(ctx, 'nameInputId');
             const promptEl = getContextElement(ctx, 'promptTextareaId');
             const modelEl = getContextElement(ctx, 'modelSelectId');
+            const providerEl = getContextElement(ctx, 'providerSelectId');
             if (nameEl) {
                 nameEl.value = ctx.currentAgentDraft.name || '';
             }
@@ -4682,6 +4788,10 @@
                 } else {
                     promptEl.dataset.needsResize = 'true';
                 }
+            }
+            if (providerEl) {
+                providerEl.value = 'all';
+                renderAgentProviderOptions(ctx);
             }
             if (modelEl) {
                 renderAgentModelOptions(ctx, ctx.currentAgentDraft.model);
@@ -6666,13 +6776,21 @@
             const saveBtn = getContextElement(ctx, 'saveButtonId');
             const deleteBtn = getContextElement(ctx, 'deleteButtonId');
             const modelSelect = getContextElement(ctx, 'modelSelectId');
+            const providerSelect = getContextElement(ctx, 'providerSelectId');
             const nameInput = getContextElement(ctx, 'nameInputId');
             const promptTextarea = getContextElement(ctx, 'promptTextareaId');
             preparePromptTextarea(promptTextarea);
             enableScrollPassthrough(select);
             enableScrollPassthrough(modelSelect);
+            enableScrollPassthrough(providerSelect);
+            renderAgentProviderOptions(ctx);
 
             if (select) select.addEventListener('change', () => updateAgentUIFromSelection(ctx));
+            if (providerSelect) {
+                providerSelect.addEventListener('change', () => {
+                    renderAgentModelOptions(ctx, ctx.currentAgentDraft ? ctx.currentAgentDraft.model : DEFAULT_AGENT_MODEL);
+                });
+            }
             const handleRunClick = async () => {
                 try {
                     await runSelectedAgent(ctx, { autoTriggered: false });

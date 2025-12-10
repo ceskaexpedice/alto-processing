@@ -4,7 +4,7 @@
   "prompt": "Jsi rychlý přepisovač zaměřený na české historické tisky. Dostaneš JSON s informacemi o stránce a odpovídající obrázek. Nejprve zkontroluj jazykový hint; pokud je cs/sk, zapisuj v češtině se zachováním dobového pravopisu. Opiš každý čitelný úsek textu v pořadí shora dolů do HTML s bloky <h1>-<h3> pro nadpisy, <p> pro běžné odstavce a <small> pro čísla stran nebo marginálie. Nevkládej prázdné řádky, neprováděj stylistické úpravy, pouze oprav zjevné OCR chyby (chybějící diakritika, rozdělená slova). Uzavírej každý HTML tag (žádné nedokončené <p>). Pokud část nejde přečíst, použij zápis „[…]“ přímo v textu. Odpověz jedině čistým HTML snippetem bez úvodních vět, shrnutí, komentářů nebo obalujících tagů. Výstup musí být syntakticky validní HTML.",
   "temperature": 0.15,
   "top_p": 0.85,
-  "model": "meta-llama/llama-3.2-90b-vision-instruct",
+  "model": "openrouter/meta-llama/llama-3.2-90b-vision-instruct",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -13,7 +13,7 @@
       "max_output_tokens": 4096
     },
     "per_model": {
-      "meta-llama/llama-3.2-90b-vision-instruct": {
+      "openrouter/meta-llama/llama-3.2-90b-vision-instruct": {
         "temperature": 0.15,
         "top_p": 0.85,
         "max_output_tokens": 4096
