@@ -164,10 +164,6 @@ def process_page(uuid: str = Query(...), api_base: Optional[str] = Query(None)) 
         processor = AltoProcessor(api_base_url=api_base)
         processor.reset_request_stats()
         context = processor.get_book_context(uuid)
-        try:
-            processor.log_request_stats("after_get_book_context")
-        except Exception:
-            pass
         t_after_context = time.perf_counter()
         if not context:
             return _json_error("Nepodařilo se načíst metadata pro zadané UUID", status_code=404)
@@ -189,10 +185,6 @@ def process_page(uuid: str = Query(...), api_base: Optional[str] = Query(None)) 
         pretty_alto = minidom.parseString(alto_xml).toprettyxml(indent="  ")
         python_result = processor.get_formatted_text(alto_xml, page_uuid, DEFAULT_WIDTH, DEFAULT_HEIGHT)
         typescript_result = simulate_typescript_processing(alto_xml, page_uuid, DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        try:
-            processor.log_request_stats("after_process_page")
-        except Exception:
-            pass
         t_after_processing = time.perf_counter()
 
         pages = context.get("pages") or []

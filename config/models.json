@@ -48,28 +48,6 @@
       "upstream_id": "anthropic/claude-3.5-sonnet"
     },
     {
-      "id": "cerit/command-a:latest",
-      "display_name": "Command-A 111B | CERIT | Proprietary API",
-      "provider": "cerit",
-      "tier": "standard",
-      "supports_text": true,
-      "supports_scan": false,
-      "capabilities": {
-        "temperature": true,
-        "top_p": true,
-        "reasoning": false
-      },
-      "defaults": {
-        "temperature": 0.2,
-        "top_p": 0.0
-      },
-      "pricing": {
-        "input_per_million_usd": null,
-        "output_per_million_usd": null
-      },
-      "upstream_id": "command-a:latest"
-    },
-    {
       "id": "cerit/deepseek-r1",
       "display_name": "DeepSeek R1 0528 685B | CERIT | Proprietary API",
       "provider": "cerit",
@@ -390,7 +368,7 @@
       "capabilities": {
         "temperature": false,
         "top_p": false,
-        "reasoning": true
+        "reasoning": false
       },
       "defaults": {
         "reasoning_effort": "low"
@@ -411,7 +389,7 @@
       "capabilities": {
         "temperature": false,
         "top_p": false,
-        "reasoning": true
+        "reasoning": false
       },
       "defaults": {
         "reasoning_effort": "low"
@@ -913,7 +891,7 @@
       "display_name": "Qwen3 Embedding 4B | CERIT | Proprietary API",
       "provider": "cerit",
       "tier": "standard",
-      "supports_text": true,
+      "supports_text": false,
       "supports_scan": false,
       "capabilities": {
         "temperature": true,
@@ -975,10 +953,10 @@
       "upstream_id": "sec-certs-common-criteria"
     },
     {
-      "id": "openrouter/alibaba/tongyi-deepresearch-30b-a3b:free",
-      "display_name": "Tongyi DeepResearch 30B A3B (Free) | OpenRouter | Proprietary API",
+      "id": "openrouter/alibaba/tongyi-deepresearch-30b-a3b",
+      "display_name": "Tongyi DeepResearch 30B A3B | OpenRouter | Proprietary API",
       "provider": "openrouter",
-      "tier": "free",
+      "tier": "standard",
       "supports_text": true,
       "supports_scan": false,
       "capabilities": {
@@ -991,10 +969,10 @@
         "top_p": 0.0
       },
       "pricing": {
-        "input_per_million_usd": 0.0,
-        "output_per_million_usd": 0.0
+        "input_per_million_usd": null,
+        "output_per_million_usd": null
       },
-      "upstream_id": "alibaba/tongyi-deepresearch-30b-a3b:free"
+      "upstream_id": "alibaba/tongyi-deepresearch-30b-a3b"
     }
   ]
 }

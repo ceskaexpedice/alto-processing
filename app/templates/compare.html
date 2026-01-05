@@ -4823,6 +4823,9 @@
             const promptEl = getContextElement(ctx, 'promptTextareaId');
             const modelEl = getContextElement(ctx, 'modelSelectId');
             const providerEl = getContextElement(ctx, 'providerSelectId');
+            const currentModelId = ctx.currentAgentDraft.model || '';
+            const modelDef = currentModelId ? getModelDefinition(currentModelId) : null;
+            const modelProvider = modelDef && modelDef.provider ? String(modelDef.provider).trim().toLowerCase() : 'all';
             if (nameEl) {
                 nameEl.value = ctx.currentAgentDraft.name || '';
             }
@@ -4840,8 +4843,8 @@
                 }
             }
             if (providerEl) {
-                providerEl.value = 'all';
                 renderAgentProviderOptions(ctx);
+                providerEl.value = modelProvider && providerEl.querySelector(`option[value="${modelProvider}"]`) ? modelProvider : 'all';
             }
             if (modelEl) {
                 renderAgentModelOptions(ctx, ctx.currentAgentDraft.model);
@@ -6908,6 +6911,9 @@
             if (providerSelect) {
                 providerSelect.addEventListener('change', () => {
                     renderAgentModelOptions(ctx, ctx.currentAgentDraft ? ctx.currentAgentDraft.model : DEFAULT_AGENT_MODEL);
+                    const updatedModel = ctx.currentAgentDraft ? ctx.currentAgentDraft.model : DEFAULT_AGENT_MODEL;
+                    renderAgentParameterControls(ctx, updatedModel);
+                    scheduleThumbnailDrawerHeightSync();
                 });
             }
             const handleRunClick = async () => {

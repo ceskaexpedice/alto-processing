@@ -691,6 +691,20 @@ def _get_upstream_model_id(model_id: str) -> str:
     return upstream or model_id
 
 
+def _get_provider_scoped_model_id(model_id: str, provider_name: str) -> str:
+    """Normalize upstream model id for specific provider APIs.
+
+    For OpenAI, model ids nesmí mít prefix 'openai/' – pošleme pouze název modelu
+    (např. 'gpt-4o', 'gpt-4.1', 'gpt-5').
+    """
+    upstream = _get_upstream_model_id(model_id)
+    if provider_name.lower().strip() == "openai" and isinstance(upstream, str):
+        prefix = "openai/"
+        if upstream.startswith(prefix):
+            return upstream[len(prefix):]
+    return upstream
+
+
 def _load_json_if_string(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -1309,7 +1323,6 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         if agent.get("model")
         else DEFAULT_MODEL
     )
-    upstream_model_id = _get_upstream_model_id(model)
     if collection == "readers" and not _model_supports_scan(model):
         raise AgentRunnerError(f"Model {model} nepodporuje čtení ze skenu – vyberte jiný model.")
     if collection != "readers" and not _model_supports_text(model):
@@ -1317,6 +1330,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
 
     model_definition = MODEL_DEFINITION_MAP.get(_normalize_model_id(model)) or {}
     provider_name = model_definition.get("provider") or "openrouter"
+    upstream_model_id = _get_provider_scoped_model_id(model, provider_name)
     provider_config = _get_provider_config(provider_name)
     provider_supports_responses = bool(provider_config.get("supports_responses", False))
     provider_supports_chat = bool(provider_config.get("supports_chat", False))
