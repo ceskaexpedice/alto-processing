@@ -76,6 +76,7 @@ PROVIDER_DEFINITION_MAP: Dict[str, Dict[str, Any]] = {}
 ENABLE_RESPONSE_FORMAT = False  # sleeper feature – enable once OpenRouter enforces response_format
 
 DEFAULT_API_BASES = [
+    "https://api.kramerius.mzk.cz/search/api/client/v7.0",
     "https://kramerius.mzk.cz/search/api/v5.0",
     "https://kramerius5.nkp.cz/search/api/v5.0",
 ]
@@ -1128,7 +1129,10 @@ def _apply_diff_to_document(
             raise AgentDiffApplicationError("Položka diffu postrádá platné 'id'.")
         target = block_index_map.get(block_id)
         if target is None:
-            raise AgentDiffApplicationError(f"Diff odkazuje na neznámý blok '{block_id}'.")
+            # Podporujeme i nové bloky (např. při splitu) – přidáme je na konec jako paragraf.
+            target = {"id": block_id, "type": "p", "text": ""}
+            cloned_blocks.append(target)
+            block_index_map[block_id] = target
         block_type = str(target.get("type") or "").lower()
         if block_type == "note":
             # Notes slouží jen jako kontext – ignorujeme změny i smazání.
@@ -1252,11 +1256,21 @@ def _build_document_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not python_html or not str(python_html).strip():
         raise AgentRunnerError("Python výstup pro agenta je prázdný.")
 
+    language_hint = payload.get("language_hint") or DEFAULT_LANGUAGE_HINT
+    ignore_format = collection in {"custom_lmm", "correctors"} and bool(payload.get("ignore_format"))
+
     blocks = _html_to_blocks(str(python_html))
     if not blocks:
         raise AgentRunnerError("Python výstup se nepodařilo převést na bloky.")
 
-    language_hint = payload.get("language_hint") or DEFAULT_LANGUAGE_HINT
+    if ignore_format:
+        filtered_blocks = [block for block in blocks if str(block.get("type") or "").lower() != "note"]
+        joined_text = "\n".join(block.get("text", "") for block in filtered_blocks if block.get("text"))
+        return {
+            "language_hint": language_hint,
+            "text": joined_text,
+            "ignore_format": True,
+        }
 
     return {
         "language_hint": language_hint,
@@ -1274,6 +1288,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         raise AgentRunnerError("Agent nemá vyplněný prompt.")
 
     collection = str(payload.get("collection") or "").strip().lower()
+    ignore_format = collection in {"custom_lmm", "correctors"} and bool(payload.get("ignore_format"))
     reader_inputs: Optional[Dict[str, Any]] = None
     user_payload = ''
     user_message_blocks: Optional[list] = None
@@ -1282,8 +1297,12 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         document_payload = reader_inputs["document_payload"]
     else:
         document_payload = _build_document_payload(payload or {})
-        user_payload = json.dumps(document_payload, ensure_ascii=False, indent=2)
-        user_message_blocks = [{"type": "input_text", "text": user_payload}]
+        if ignore_format:
+            user_payload = str(document_payload.get("text") or "")
+            user_message_blocks = [{"type": "input_text", "text": user_payload}]
+        else:
+            user_payload = json.dumps(document_payload, ensure_ascii=False, indent=2)
+            user_message_blocks = [{"type": "input_text", "text": user_payload}]
 
     model = (
         str(agent.get("model")).strip()
@@ -1590,9 +1609,10 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         usage = response_dict.get("usage") if isinstance(response_dict, dict) else None
     diff_applied = False
     diff_changes = None
+    diff_error: Optional[str] = None
     output_document: Optional[Dict[str, Any]] = None
 
-    parsed_output = _safe_json_loads(text)
+    parsed_output = None if ignore_format else _safe_json_loads(text)
     _log_raw_response(raw_model_output)
     try:
         print("[LLMDebug] parsed text preview:\n", repr(str(text)))
@@ -1619,6 +1639,7 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 applied_document = _apply_diff_to_document(document_payload, parsed_output)
             except AgentDiffApplicationError as exc:
+                diff_error = str(exc)
                 _log_diff_warning(document_payload, f"Diff aplikace selhala: {exc}")
                 if parsed_output:
                     try:
@@ -1660,4 +1681,6 @@ def run_agent(agent: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         "diff_applied": diff_applied,
         "diff_changes": diff_changes if diff_applied else None,
         "output_document": output_document,
+        "diff_error": diff_error,
+        "format_ignored": ignore_format,
     }

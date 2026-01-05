@@ -17,6 +17,8 @@ import sys
 import argparse
 import statistics
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor, Future
 
 # Heuristické multiplikátory pro dělení bloků; úprava na jednom místě usnadní ladění.
 VERTICAL_GAP_MULTIPLIER = 2.5   # Kolikrát musí být mezera mezi řádky větší než typická mezera, aby vznikl nový blok.
@@ -79,11 +81,31 @@ BLOCK_MIN_TOTAL_CHARS = 40          # Minimální množství znaků v TextBlocku
 MIN_WORDS_PER_PAGE = 20             # Minimální počet slov na stránce pro výpočet průměrné výšky.
 
 BOOK_TEXT_STYLE_CACHE: Dict[str, Dict[str, Any]] = {}
+ITEM_CACHE: Dict[str, Dict[str, Any]] = {}
+MODS_CACHE: Dict[str, List[Dict[str, str]]] = {}
+PAGES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
 DEFAULT_API_BASES: List[str] = [
+    "https://api.kramerius.mzk.cz/search/api/client/v7.0",
     "https://kramerius.mzk.cz/search/api/v5.0",
     "https://kramerius5.nkp.cz/search/api/v5.0",
 ]
+
+# Map API base -> IIIF library code (used for IIIF Presentation manifests)
+IIIF_LIBRARY_CODES: Dict[str, str] = {
+    "https://api.kramerius.mzk.cz/search/api/client/v7.0": "mzk",
+}
+
+# Verbose ALTO debug logging; set to True locally if needed.
+LOG_DEBUG_ALTO = False
+
+
+def _debug(msg: str) -> None:
+    if LOG_DEBUG_ALTO:
+        print(f"[DEBUG]: {msg}")
+
+# Shared executor for parallel fetches (bounded size)
+_EXECUTOR = ThreadPoolExecutor(max_workers=6)
 
 class AltoProcessor:
     def __init__(
@@ -105,6 +127,10 @@ class AltoProcessor:
         self._api_base_candidates = self._normalize_api_bases(base_candidates)
         self.api_base_url = self._api_base_candidates[0] if self._api_base_candidates else ""
         self._book_text_cache = BOOK_TEXT_STYLE_CACHE
+        self._request_stats: Dict[str, int] = {}
+        self._item_cache = ITEM_CACHE
+        self._mods_cache = MODS_CACHE
+        self._pages_cache = PAGES_CACHE
         # HTTP session with retries for robustness on flaky Kramerius endpoints
         self.session = requests.Session()
         retries = Retry(
@@ -119,11 +145,261 @@ class AltoProcessor:
         self.session.mount("http://", adapter)
 
     @staticmethod
+    def _detect_api_version(base: str) -> str:
+        lowered = base.lower()
+        if "api/client/v7.0" in lowered:
+            return "k7"
+        if "search/api/v5.0" in lowered:
+            return "k5"
+        return "k5"
+
+    @staticmethod
+    def _format_pid_for_version(uuid: str, version: str) -> str:
+        trimmed = (uuid or "").strip()
+        if version == "k7":
+            if trimmed.startswith("uuid:"):
+                return trimmed
+            if trimmed:
+                return f"uuid:{trimmed}"
+            return ""
+        # k5 keeps historical behavior (strip prefix)
+        return AltoProcessor._strip_uuid_prefix(trimmed)
+
+    @staticmethod
     def _normalize_api_base(value: str) -> Optional[str]:
         if not value:
             return None
         normalized = value.rstrip('/')
         return normalized or None
+
+    def _get_cached_item(self, pid: str) -> Optional[Dict[str, Any]]:
+        return self._item_cache.get(pid)
+
+    def _cache_item(self, pid: str, data: Dict[str, Any]) -> None:
+        if pid:
+            if pid in self._item_cache and isinstance(self._item_cache.get(pid), dict) and isinstance(data, dict):
+                self._item_cache[pid].update(data)
+            else:
+                self._item_cache[pid] = data
+
+    def _get_cached_pages(self, book_uuid: str) -> Optional[List[Dict[str, Any]]]:
+        return self._pages_cache.get(book_uuid or "")
+
+    def _cache_pages(self, book_uuid: str, pages: List[Dict[str, Any]]) -> None:
+        if book_uuid and isinstance(pages, list):
+            self._pages_cache[book_uuid] = pages
+
+    def _get_cached_mods(self, pid: str) -> Optional[List[Dict[str, str]]]:
+        return self._mods_cache.get(pid)
+
+    def _cache_mods(self, pid: str, metadata: List[Dict[str, str]]) -> None:
+        if pid and isinstance(metadata, list):
+            self._mods_cache[pid] = metadata
+
+    @staticmethod
+    def _has_core_item_fields(data: Dict[str, Any]) -> bool:
+        if not isinstance(data, dict):
+            return False
+        return any(
+            key in data and data.get(key)
+            for key in ("model", "title", "details", "context", "root_pid")
+        )
+
+    def _get_library_code_for_base(self, base: Optional[str]) -> Optional[str]:
+        if not base:
+            return None
+        normalized = self._normalize_api_base(base)
+        return IIIF_LIBRARY_CODES.get(normalized)
+
+    @staticmethod
+    def _extract_label_text(label_obj: Any) -> str:
+        if not label_obj:
+            return ""
+        if isinstance(label_obj, str):
+            return label_obj.strip()
+        if isinstance(label_obj, dict):
+            for key in ("none", "cs", "en"):
+                values = label_obj.get(key)
+                if isinstance(values, list) and values:
+                    text = str(values[0]).strip()
+                    if text:
+                        return text
+        if isinstance(label_obj, list) and label_obj:
+            text = str(label_obj[0]).strip()
+            return text
+        return ""
+
+    @staticmethod
+    def _extract_uuid_from_canvas_id(canvas_id: str) -> Optional[str]:
+        if not canvas_id:
+            return None
+        matches = re.findall(r"uuid:([0-9a-fA-F-]+)", canvas_id)
+        if matches:
+            return matches[-1]
+        return None
+
+    def _extract_uuid_from_canvas(self, canvas: Dict[str, Any]) -> Optional[str]:
+        # 1) thumbnail -> items/uuid:xxx/
+        thumbs = canvas.get("thumbnail") or []
+        if isinstance(thumbs, list) and thumbs:
+            first = thumbs[0]
+            tid = first.get("id") if isinstance(first, dict) else (first if isinstance(first, str) else "")
+            uuid_thumb = self._extract_uuid_from_canvas_id(str(tid))
+            if uuid_thumb:
+                # _debug(f"uuid from thumbnail raw={tid} parsed={uuid_thumb}")
+                return uuid_thumb
+
+        # 2) seeAlso -> items/uuid:xxx/
+        see_also = canvas.get("seeAlso") or canvas.get("see_also") or []
+        if isinstance(see_also, list) and see_also:
+            first = see_also[0]
+            sid = first.get("id") if isinstance(first, dict) else (first if isinstance(first, str) else "")
+            uuid_see = self._extract_uuid_from_canvas_id(str(sid))
+            if uuid_see:
+                _debug(f"uuid from seeAlso raw={sid} parsed={uuid_see}")
+                return uuid_see
+
+        # 3) body.service @id -> .../search/iiif/uuid:xxx
+        try:
+            items = canvas.get("items") or []
+            if items and isinstance(items[0], dict):
+                annos = items[0].get("items") or []
+                if annos and isinstance(annos[0], dict):
+                    body = annos[0].get("body") or {}
+                    services = body.get("service") or body.get("services") or []
+                    if isinstance(services, list) and services:
+                        svc = services[0]
+                        sid = ""
+                        if isinstance(svc, dict):
+                            sid = svc.get("@id") or svc.get("id") or ""
+                        elif isinstance(svc, str):
+                            sid = svc
+                        uuid_svc = self._extract_uuid_from_canvas_id(str(sid))
+                        if uuid_svc:
+                            _debug(f"uuid from body.service raw={sid} parsed={uuid_svc}")
+                            return uuid_svc
+        except Exception:
+            pass
+
+        # 4) body.id as last resort
+        try:
+            items = canvas.get("items") or []
+            if items and isinstance(items[0], dict):
+                annos = items[0].get("items") or []
+                if annos and isinstance(annos[0], dict):
+                    body = annos[0].get("body") or {}
+                    body_id = body.get("id") or body.get("@id") or ""
+                    uuid_from_body = self._extract_uuid_from_canvas_id(str(body_id))
+                    if uuid_from_body:
+                        _debug(f"uuid from body.id raw={body_id} parsed={uuid_from_body}")
+                        return uuid_from_body
+        except Exception:
+            pass
+
+        # 5) canvas.id (book) — fallback only if nothing else found
+        canvas_id = canvas.get("id") or ""
+        uuid_from_id = self._extract_uuid_from_canvas_id(str(canvas_id))
+        if uuid_from_id:
+            _debug(f"uuid from canvas.id raw={canvas_id} parsed={uuid_from_id}")
+            return uuid_from_id
+
+        return None
+
+    def _build_thumbnail_from_canvas(self, canvas: Dict[str, Any]) -> Optional[str]:
+        thumb = None
+        if isinstance(canvas.get("thumbnail"), list) and canvas["thumbnail"]:
+            first_thumb = canvas["thumbnail"][0]
+            if isinstance(first_thumb, dict):
+                thumb = first_thumb.get("id")
+            elif isinstance(first_thumb, str):
+                thumb = first_thumb
+        if thumb:
+            return thumb
+
+        try:
+            items = canvas.get("items") or []
+            if items and isinstance(items[0], dict):
+                annos = items[0].get("items") or []
+                if annos and isinstance(annos[0], dict):
+                    body = annos[0].get("body") or {}
+                    services = body.get("service") or body.get("services") or []
+                    if isinstance(services, list) and services:
+                        service_id = services[0].get("id") if isinstance(services[0], dict) else None
+                        if service_id:
+                            return f"{service_id}/full/!256,256/0/default.jpg"
+        except Exception:
+            return None
+        return None
+
+    def _pages_from_manifest(self, book_uuid: str, library_code: str) -> List[Dict[str, Any]]:
+        manifest_url = f"https://iiif.digitalniknihovna.cz/{library_code}/uuid:{book_uuid}"
+        try:
+            self._stat_increment("iiif_manifest")
+            response = self.session.get(manifest_url, timeout=API_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+        except Exception:
+            self._stat_increment("iiif_manifest_fail")
+            return []
+
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return []
+        _debug(f"manifest fetched url={manifest_url} items={len(items)}")
+
+        pages: List[Dict[str, Any]] = []
+        for idx, canvas in enumerate(items):
+            if not isinstance(canvas, dict):
+                continue
+            canvas_id = canvas.get("id") or ""
+            page_uuid = self._extract_uuid_from_canvas(canvas)
+            if not page_uuid:
+                _debug(f"manifest skip canvas[{idx}] no uuid id={canvas_id}")
+                continue
+            if self._strip_uuid_prefix(page_uuid).lower() == self._strip_uuid_prefix(book_uuid).lower():
+                _debug(f"manifest skip canvas[{idx}] uuid equals book uuid={page_uuid}")
+                continue
+            page_uuid_norm = page_uuid.lower()
+            label_raw = self._extract_label_text(canvas.get("label"))
+            label_text = label_raw
+            # drop trailing annotations in parentheses, keep bracketed numbers
+            if "(" in label_text:
+                label_text = label_text.split("(", 1)[0].strip()
+            label_text = label_text.strip()
+            thumb_url = self._build_thumbnail_from_canvas(canvas)
+            if idx < 5:
+                body_uuid = self._extract_uuid_from_canvas(canvas)
+                _debug(
+                    f"manifest canvas[{idx}] id={canvas_id} body_uuid={body_uuid} "
+                    f"parsed_uuid={page_uuid_norm} label_raw={label_raw} label_clean={label_text} thumb={bool(thumb_url)}"
+                )
+                if idx == 0:
+                    # show keys to understand structure
+                    _debug(f"manifest canvas[0] keys={list(canvas.keys())}")
+            summary = {
+                "uuid": page_uuid_norm,
+                "index": idx,
+                "title": label_text,
+                "pageNumber": label_text,
+                "pageType": "",
+                "pageSide": "",
+                "model": "page",
+                "policy": None,
+            }
+            if thumb_url:
+                summary["thumbnail"] = thumb_url
+            pages.append(summary)
+        return pages
+
+    def _stat_increment(self, key: str, amount: int = 1) -> None:
+        self._request_stats[key] = self._request_stats.get(key, 0) + amount
+
+    def reset_request_stats(self) -> None:
+        self._request_stats = {}
+        # Do not clear caches here; they are cross-request
+
+    def get_request_stats(self) -> Dict[str, int]:
+        return dict(self._request_stats)
 
     def _normalize_api_bases(self, bases: List[str]) -> List[str]:
         ordered: List[str] = []
@@ -418,8 +694,8 @@ class AltoProcessor:
                 previous_bottom = record['bottom']
                 previous_left = record['hpos']
 
-            print(f"DEBUG: vertical_gaps={vertical_gaps}")
-            print(f"DEBUG: horizontal_shifts={horizontal_shifts}")
+            # _debug(f"DEBUG: vertical_gaps={vertical_gaps}")
+            # _debug(f"DEBUG: horizontal_shifts={horizontal_shifts}")
 
             median_height = statistics.median(line_heights) if line_heights else 0
             positive_gaps = [gap for gap in vertical_gaps if gap > 0]
@@ -618,7 +894,7 @@ class AltoProcessor:
                     current_total_chars += char_count
                     line_has_content = True
 
-                    print(f"DEBUG string: content='{content}', style='{style}', is_bold={signature[1]}")
+                    # _debug(f"string: content='{content}', style='{style}', is_bold={signature[1]}")
                     if signature[1]:  # bold
                         current_bold_counter[font_size] += char_count
 
@@ -921,20 +1197,20 @@ class AltoProcessor:
             return result
 
         def compute_average_height_for_page(page_uuid: str) -> Optional[Dict[str, Any]]:
-            print(f"[height-calc] Processing page {page_uuid}")
+            _debug(f"Processing page {page_uuid}")
             alto_xml = self.get_alto_data(page_uuid)
             if not alto_xml:
-                print(f"[height-calc] No ALTO XML for page {page_uuid}")
+                _debug(f"No ALTO XML for page {page_uuid}")
                 return None
             root = self._parse_alto_root(alto_xml)
             if root is None:
-                print(f"[height-calc] Failed to parse ALTO XML for page {page_uuid}")
+                _debug(f"Failed to parse ALTO XML for page {page_uuid}")
                 return None
 
             text_lines = root.findall('.//{http://www.loc.gov/standards/alto/ns-v3#}TextLine')
             if not text_lines:
                 text_lines = root.findall('.//{http://www.loc.gov/standards/alto/ns-v2#}TextLine')
-            print(f"[height-calc] Found {len(text_lines)} text lines for page {page_uuid}")
+            _debug(f"Found {len(text_lines)} text lines for page {page_uuid}")
 
             word_heights = []
             for tl in text_lines:
@@ -948,17 +1224,17 @@ class AltoProcessor:
                             word_heights.append(float(h))
                         except ValueError:
                             continue
-            print(f"[height-calc] Found {len(word_heights)} word heights for page {page_uuid}")
+            _debug(f"Found {len(word_heights)} word heights for page {page_uuid}")
 
             if len(word_heights) < MIN_WORDS_PER_PAGE:
-                print(f"[height-calc] Only {len(word_heights)} words, less than minimum {MIN_WORDS_PER_PAGE}, skipping page {page_uuid}")
+                _debug(f"Only {len(word_heights)} words, less than minimum {MIN_WORDS_PER_PAGE}, skipping page {page_uuid}")
                 return None
 
             # Compute mode of word heights
             rounded_heights = [round(h, 1) for h in word_heights]
             height_counts = Counter(rounded_heights)
             mode_height = height_counts.most_common(1)[0][0]
-            print(f"[height-calc] Mode word height for page {page_uuid}: {mode_height}")
+            _debug(f"Mode word height for page {page_uuid}: {mode_height}")
             return {
                 'mode_height': mode_height,
                 'word_heights': word_heights,
@@ -976,10 +1252,10 @@ class AltoProcessor:
 
         # Filtrovat stránky na pravděpodobně textové
         text_pages = [p for p in pages if self._is_probably_text_page(p)]
-        print(f"[text-format] Filtered to {len(text_pages)} probable text pages out of {len(pages)} total")
+        _debug(f"Filtered to {len(text_pages)} probable text pages out of {len(pages)} total")
 
         if not text_pages:
-            print(f"[text-format] No text pages found, cannot calculate height")
+            _debug(f"No text pages found, cannot calculate height")
             result = {
                 'average_height': None,
                 'confidence': 0,
@@ -988,17 +1264,17 @@ class AltoProcessor:
             self._book_text_cache[cache_key] = result
             return result
 
-        # Použít distribuované vzorkování
-        wave_index = 0
-        sampled_indices = self._compute_wave_indices(len(text_pages), wave_index)
-        initial_sample_count = len(sampled_indices)
-        print(f"[text-format] Wave {wave_index} sampling indices: {sampled_indices}")
+        # Simplified sampling: use up to 5 evenly distributed pages to avoid many ALTO fetches
+        sample_target = min(5, len(text_pages))
+        indices = list({int(i * (len(text_pages) - 1) / (sample_target - 1)) for i in range(sample_target)}) if sample_target > 1 else [0]
+        indices = sorted(idx for idx in indices if 0 <= idx < len(text_pages))
+        _debug(f"Sampling indices (simplified): {indices}")
 
-        for idx in sampled_indices:
+        for idx in indices:
             page = text_pages[idx]
             page_uuid = page.get('uuid')
             if not page_uuid:
-                print(f"[text-format] Skipping page index {idx}, no UUID")
+                _debug(f"Skipping page index {idx}, no UUID")
                 continue
             page_data = compute_average_height_for_page(page_uuid)
             if page_data is not None:
@@ -1008,70 +1284,12 @@ class AltoProcessor:
                 total_lines_sampled += page_data['lines_count']
                 total_words_sampled += page_data['word_count']
                 sampled_page_uuids.append(page_data['uuid'])
-                print(f"[text-format] Added mode height {page_data['mode_height']} from page index {idx} (page {page.get('index', idx)})")
+                _debug(f"Added mode height {page_data['mode_height']} from page index {idx} (page {page.get('index', idx)})")
             else:
-                print(f"[text-format] Failed to get height from page index {idx}")
-
-        if len(heights_per_page) < 2:
-            # Nedostatek dat pro výpočet variance
-            print(f"[text-format] Only {len(heights_per_page)} valid pages, need at least 2 for variance calculation")
-            result = {
-                'average_height': None,
-                'confidence': 0,
-                'pages_used': pages_used,
-            }
-            self._book_text_cache[cache_key] = result
-            return result
-
-        # Vyhodnotit rozptyl hodnot a případně přidat další vlny
-        print(f"[text-format] Heights per page: {heights_per_page}")
-        wave_index = 0  # už jsme udělali wave 0
-        while len(heights_per_page) > 1 and wave_index + 1 < TEXT_SAMPLE_MAX_WAVES:
-            stdev = statistics.stdev(heights_per_page)
-            mean = statistics.mean(heights_per_page)
-            print(f"[text-format] Wave {wave_index} stdev: {stdev}, mean: {mean}")
-
-            # Estimate confidence from relative variance and allow early stop.
-            # Use fractional confidence in range 0.0..1.0 (1 - relative_variance).
-            rel_var_wave = (stdev / mean) if mean else 1.0
-            estimated_confidence_frac = max(0.0, min(1.0, 1.0 - rel_var_wave))
-            estimated_confidence_percent = int(round(estimated_confidence_frac * 100))
-            print(f"[text-format] Wave {wave_index} estimated confidence: {estimated_confidence_frac:.3f} ({estimated_confidence_percent}%)")
-            if estimated_confidence_frac >= MIN_CONFIDENCE_FOR_EARLY_STOP:
-                print(f"[text-format] Confidence {estimated_confidence_percent}% >= MIN_CONFIDENCE_FOR_EARLY_STOP ({MIN_CONFIDENCE_FOR_EARLY_STOP:.2f}), stopping early")
-                break
-
-            if stdev > 0.1 * mean:
-                wave_index += 1
-                additional_indices = self._compute_wave_indices(len(text_pages), wave_index)
-                print(f"[text-format] Adding wave {wave_index} with indices: {additional_indices}")
-                for idx in additional_indices:
-                    if idx >= len(text_pages):
-                        continue
-                    page = text_pages[idx]
-                    page_uuid = page.get('uuid')
-                    if not page_uuid:
-                        print(f"[text-format] Skipping additional page index {idx}, no UUID")
-                        continue
-                    page_data = compute_average_height_for_page(page_uuid)
-                    if page_data is not None:
-                        heights_per_page.append(page_data['mode_height'])
-                        all_word_heights.extend(page_data['word_heights'])
-                        pages_used += 1
-                        total_lines_sampled += page_data['lines_count']
-                        total_words_sampled += page_data['word_count']
-                        sampled_page_uuids.append(page_data['uuid'])
-                        print(f"[text-format] Added additional mode height {page_data['mode_height']} from page index {idx} (wave {wave_index})")
-                    else:
-                        print(f"[text-format] Failed to get additional height from page index {idx}")
-            else:
-                print(f"[text-format] Variance acceptable after wave {wave_index}, stopping")
-                break
-        if len(heights_per_page) <= 1:
-            print(f"[text-format] Only one height or less, skipping variance check")
+                _debug(f"Failed to get height from page index {idx}")
 
         if not heights_per_page:
-            print(f"[text-format] No heights collected, returning None")
+            _debug(f"No heights collected, returning None")
             result = {
                 'average_height': None,
                 'confidence': 0,
@@ -1080,38 +1298,16 @@ class AltoProcessor:
             self._book_text_cache[cache_key] = result
             return result
 
-        # Compute average of all word heights after removing outliers
-        if all_word_heights:
-            sorted_heights = sorted(all_word_heights)
-            q1 = statistics.quantiles(sorted_heights, n=4)[0]
-            q3 = statistics.quantiles(sorted_heights, n=4)[2]
-            iqr = q3 - q1
-            lower_bound = q1 - 1.5 * iqr
-            upper_bound = q3 + 1.5 * iqr
-            filtered_heights = [h for h in all_word_heights if lower_bound <= h <= upper_bound]
-            if filtered_heights:
-                final_mean = round(sum(filtered_heights) / len(filtered_heights), 2)
-                print(f"[text-format] Final mean height after outlier removal: {final_mean} from {len(filtered_heights)} words (out of {len(all_word_heights)} total)")
-            else:
-                final_mean = round(sum(all_word_heights) / len(all_word_heights), 2)
-                print(f"[text-format] No outliers removed, final mean height: {final_mean} from {len(all_word_heights)} words")
-        else:
-            final_mean = round(sum(heights_per_page) / len(heights_per_page), 2)
-            print(f"[text-format] No word heights, using page modes mean: {final_mean}")
-
-        if len(heights_per_page) > 1:
-            stdev = statistics.stdev(heights_per_page)
-            rel_var = stdev / final_mean if final_mean else 1.0
-            confidence_frac = max(0.0, min(1.0, 1.0 - rel_var))
-            confidence = int(round(confidence_frac * 100))
-            print(f"[text-format] Final stdev: {stdev}, relative variance: {rel_var:.3f}, confidence: {confidence_frac:.3f} ({confidence}%)")
-        else:
-            confidence = 100
-            print(f"[text-format] Single page, confidence: 100")
+        mean_height = statistics.mean(heights_per_page)
+        stdev = statistics.pstdev(heights_per_page) if len(heights_per_page) > 1 else 0.0
+        rel_var = (stdev / mean_height) if mean_height else 0.0
+        confidence_frac = min(1.0, max(0.0, 1.0 - rel_var))
+        confidence = int(round(confidence_frac * 100))
+        _debug(f"Final mean height: {mean_height} stdev={stdev} rel_var={rel_var:.3f} confidence={confidence}%")
 
         result = {
             'basicTextStyle': {
-                'fontSize': final_mean,
+                'fontSize': round(mean_height, 2),
                 'isBold': False,
                 'isItalic': False,
                 'fontFamily': '',
@@ -1119,45 +1315,99 @@ class AltoProcessor:
             },
             'confidence': confidence,
             'sampledPages': pages_used,
-            'sampleTarget': TEXT_SAMPLE_WAVE_SIZE,
+            'sampleTarget': sample_target,
             'linesSampled': total_lines_sampled,
             'distinctStyles': len(set(heights_per_page)),
             'sampledPageUuids': sampled_page_uuids,
             'totalSamples': total_words_sampled,
-            'average_height': final_mean,
+            'average_height': round(mean_height, 2),
             'pages_used': pages_used,
         }
 
         try:
             log_payload = {
                 'book': book_uuid,
-                'average_height': final_mean,
+                'average_height': mean_height,
                 'confidence': confidence,
                 'pages_used': pages_used,
             }
-            print("[text-format] " + json.dumps(log_payload, ensure_ascii=False))
+            _debug(json.dumps(log_payload, ensure_ascii=False))
         except Exception as err:
-            print(f"[text-format] Logging failed for book {book_uuid}: {err}")
+            _debug(f"Logging failed for book {book_uuid}: {err}")
 
         self._book_text_cache[cache_key] = result
         return result
 
     def get_item_json(self, uuid: str, api_base_override: Optional[str] = None) -> Dict[str, Any]:
-        normalized = self._strip_uuid_prefix(uuid)
-        if not normalized:
+        raw_uuid = (uuid or "").strip()
+        if not raw_uuid:
             return {}
 
+        cached = self._get_cached_item(raw_uuid)
+        if cached and self._has_core_item_fields(cached):
+            self._stat_increment("info_cache_hit")
+            return cached
+
+        self._stat_increment("info_cache_miss")
         attempted: List[str] = []
         last_error: Optional[Exception] = None
         for base in self._iter_api_bases(api_base_override):
             attempted.append(base)
-            url = f"{base}/item/uuid:{normalized}"
+            version = self._detect_api_version(base)
+            pid = self._format_pid_for_version(raw_uuid, version)
+            if not pid:
+                continue
             try:
+                if version == "k7":
+                    self._stat_increment("info_k7")
+                    info_url = f"{base}/items/{pid}/info"
+                    structure_url = f"{base}/items/{pid}/info/structure"
+
+                    info_resp = self.session.get(info_url, timeout=API_TIMEOUT)
+                    info_resp.raise_for_status()
+                    info_data = info_resp.json() if info_resp.headers.get("Content-Type", "").startswith("application/json") else {}
+
+                    structure_resp = self.session.get(structure_url, timeout=API_TIMEOUT)
+                    structure_resp.raise_for_status()
+                    structure_data = structure_resp.json() if structure_resp.headers.get("Content-Type", "").startswith("application/json") else {}
+
+                    merged: Dict[str, Any] = {}
+                    if isinstance(info_data, dict):
+                        merged.update(info_data)
+                    if isinstance(structure_data, dict):
+                        merged.setdefault("structure", structure_data)
+                        # carry over model/pid/parents/children if not present in info
+                        for key in ("model", "pid", "parents", "children"):
+                            if key not in merged and key in structure_data:
+                                merged[key] = structure_data.get(key)
+
+                    merged.setdefault("pid", pid)
+                    # Propagate parent PID as root_pid to help locate book context
+                    parents = merged.get("parents") or {}
+                    own_parent = parents.get("own") or {}
+                    parent_pid = own_parent.get("pid")
+                    if parent_pid and not merged.get("root_pid"):
+                        merged["root_pid"] = parent_pid
+                    # Build minimal context from parent if missing (helps _pick_book_uuid_from_context)
+                    if parent_pid and not merged.get("context"):
+                        merged["context"] = [[{"pid": parent_pid, "model": own_parent.get("model") or own_parent.get("relation") or ""}]]
+
+                    self._remember_successful_base(base)
+                    if isinstance(merged, dict):
+                        self._cache_item(raw_uuid, merged)
+                        return merged
+                    return {}
+
+                self._stat_increment("info_k5")
+                url = f"{base}/item/uuid:{pid}"
                 response = self.session.get(url, timeout=API_TIMEOUT)
                 response.raise_for_status()
                 data = response.json()
                 self._remember_successful_base(base)
-                return data if isinstance(data, dict) else {}
+                if isinstance(data, dict):
+                    self._cache_item(raw_uuid, data)
+                    return data
+                return {}
             except Exception as exc:
                 last_error = exc
                 continue
@@ -1167,16 +1417,63 @@ class AltoProcessor:
         return {}
 
     def get_children(self, uuid: str, api_base_override: Optional[str] = None) -> List[Dict[str, Any]]:
-        normalized = self._strip_uuid_prefix(uuid)
-        if not normalized:
+        raw_uuid = (uuid or "").strip()
+        if not raw_uuid:
             return []
 
+        cached = self._get_cached_item(raw_uuid)
+        if cached and isinstance(cached.get("children"), list):
+            self._stat_increment("children_cache_hit")
+            return cached["children"]
+
+        self._stat_increment("children_cache_miss")
         attempted: List[str] = []
         last_error: Optional[Exception] = None
         for base in self._iter_api_bases(api_base_override):
             attempted.append(base)
-            url = f"{base}/item/uuid:{normalized}/children"
+            version = self._detect_api_version(base)
+            pid = self._format_pid_for_version(raw_uuid, version)
+            if not pid:
+                continue
             try:
+                if version == "k7":
+                    self._stat_increment("children_k7")
+                    url = f"{base}/items/{pid}/info/structure"
+                    response = self.session.get(url, timeout=CHILDREN_TIMEOUT)
+                    response.raise_for_status()
+                    data = response.json()
+                    children_block = {}
+                    if isinstance(data, dict):
+                        children_block = data.get("children") or {}
+                    own = children_block.get("own") if isinstance(children_block, dict) else None
+                    foster = children_block.get("foster") if isinstance(children_block, dict) else None
+                    raw_children = []
+                    if isinstance(own, list):
+                        raw_children.extend(own)
+                    if isinstance(foster, list):
+                        raw_children.extend(foster)
+                    normalized: List[Dict[str, Any]] = []
+                    for child in raw_children:
+                        if isinstance(child, dict):
+                            model_value = child.get("model") or child.get("type") or None
+                            if not model_value:
+                                model_value = "page"
+                            normalized.append({
+                                "pid": child.get("pid"),
+                                "model": model_value,
+                            })
+                        else:
+                            normalized.append({"pid": child, "model": None})
+                    # cache normalized children for this pid (merge with existing item info)
+                    existing = self._get_cached_item(raw_uuid) or {}
+                    merged = dict(existing)
+                    merged["children"] = normalized
+                    self._cache_item(raw_uuid, merged)
+                    self._remember_successful_base(base)
+                    return normalized
+
+                self._stat_increment("children_k5")
+                url = f"{base}/item/uuid:{pid}/children"
                 response = self.session.get(url, timeout=CHILDREN_TIMEOUT)
                 response.raise_for_status()
                 data = response.json()
@@ -1191,16 +1488,30 @@ class AltoProcessor:
         return []
 
     def get_mods_metadata(self, uuid: str, api_base_override: Optional[str] = None) -> List[Dict[str, str]]:
-        normalized = self._strip_uuid_prefix(uuid)
-        if not normalized:
+        raw_uuid = (uuid or "").strip()
+        if not raw_uuid:
             return []
 
         attempted: List[str] = []
         last_error: Optional[Exception] = None
         response_content: Optional[bytes] = None
+        cached_mods = self._get_cached_mods(raw_uuid)
+        if cached_mods is not None:
+            self._stat_increment("mods_cache_hit")
+            return cached_mods
+        self._stat_increment("mods_cache_miss")
         for base in self._iter_api_bases(api_base_override):
             attempted.append(base)
-            url = f"{base}/item/uuid:{normalized}/streams/BIBLIO_MODS"
+            version = self._detect_api_version(base)
+            pid = self._format_pid_for_version(raw_uuid, version)
+            if not pid:
+                continue
+            if version == "k7":
+                self._stat_increment("mods_k7")
+                url = f"{base}/items/{pid}/metadata/mods"
+            else:
+                self._stat_increment("mods_k5")
+                url = f"{base}/item/uuid:{pid}/streams/BIBLIO_MODS"
             try:
                 response = self.session.get(url, timeout=MODS_TIMEOUT)
                 response.raise_for_status()
@@ -1326,6 +1637,8 @@ class AltoProcessor:
             text = (note.text or '').strip()
             if text:
                 notes.append(text)
+                if text.lower() in ("left", "right") and not any(m.get("label") == "PageSide" for m in metadata):
+                    add_entry("PageSide", text)
         if notes:
             add_entry("Poznámky", ' | '.join(dict.fromkeys(notes)))
 
@@ -1341,15 +1654,33 @@ class AltoProcessor:
         if subjects:
             add_entry("Témata", '; '.join(dict.fromkeys(subjects)))
 
+        # Page-specific details (pageNumber / pageIndex)
+        for part in record.findall('mods:part', ns):
+            for detail in part.findall('mods:detail', ns):
+                dtype = (detail.get('type') or '').strip().lower()
+                number = (detail.findtext('mods:number', default='', namespaces=ns) or '').strip()
+                if not number:
+                    continue
+                if dtype == 'pagenumber':
+                    add_entry("PageNumber", number)
+                elif dtype == 'pageindex':
+                    add_entry("PageIndex", number)
+
+        self._cache_mods(raw_uuid, metadata)
         return metadata
 
     def _page_summary_from_child(self, child: Dict[str, Any], index: int) -> Dict[str, Any]:
         details = child.get('details') or {}
+        title_text = self._clean_text(child.get('title'))
+        page_number = self._clean_text(details.get('pagenumber'))
+        if not page_number and title_text and (child.get('model') == 'page' or child.get('model') is None):
+            # K7 typicky vrací číslo strany v title, když chybí v details
+            page_number = title_text
         return {
             "uuid": self._strip_uuid_prefix(child.get('pid')),
             "index": index,
-            "title": self._clean_text(child.get('title')),
-            "pageNumber": self._clean_text(details.get('pagenumber')),
+            "title": title_text,
+            "pageNumber": page_number,
             "pageType": self._clean_text(details.get('type')),
             "pageSide": self._clean_text(details.get('pageposition') or details.get('pagePosition') or details.get('pagerole')),
             "model": child.get('model'),
@@ -1379,6 +1710,22 @@ class AltoProcessor:
         visited: set[str] = set()
         pages: List[Dict[str, Any]] = []
 
+        cached = self._get_cached_pages(book_uuid)
+        if cached is not None:
+            self._stat_increment("pages_cache_hit")
+            return cached
+        self._stat_increment("pages_cache_miss")
+
+        # Prefer IIIF manifest for K7 when library code is known
+        active_base = self.api_base_url
+        version = self._detect_api_version(active_base)
+        library_code = self._get_library_code_for_base(active_base)
+        if version == "k7" and library_code:
+            manifest_pages = self._pages_from_manifest(book_uuid, library_code)
+            if manifest_pages:
+                return manifest_pages
+            self._stat_increment("fallback_manifest_to_api")
+
         def walk(node_uuid: str, depth: int) -> None:
             if depth > max_depth or not node_uuid or node_uuid in visited:
                 return
@@ -1390,24 +1737,90 @@ class AltoProcessor:
                 if not child_uuid:
                     continue
                 model = child.get('model')
-                if model == 'page':
+                if model == 'page' or model is None:
                     summary = self._page_summary_from_child(child, len(pages))
+                    original_page_number = summary.get("pageNumber")
+                    page_number = summary.get("pageNumber")
+                    title_text = summary.get("title")
+                    page_side = summary.get("pageSide")
+
+                    # Nejprve zkusit /info (typicky title = číslo strany)
+                    if not page_number or not title_text or not page_side:
+                        page_info = self.get_item_json(child_uuid)
+                        if page_info:
+                            info_title = self._clean_text(page_info.get('title'))
+                            info_number = self._clean_text((page_info.get('details') or {}).get('pagenumber'))
+                            if not info_number and info_title and (page_info.get('model') == 'page' or page_info.get('model') is None):
+                                info_number = info_title
+                            title_text = title_text or info_title
+                            page_number = page_number or info_number
+                            page_side = page_side or self._clean_text(
+                                (page_info.get('details') or {}).get('pageposition')
+                                or (page_info.get('details') or {}).get('pagePosition')
+                                or (page_info.get('details') or {}).get('pagerole')
+                            )
+                            if page_number and not original_page_number:
+                                self._stat_increment("page_number_from_page_info")
+                            enriched = dict(page_info)
+                            if title_text:
+                                enriched["title"] = title_text
+                            details = dict(enriched.get("details") or {})
+                            if page_number:
+                                details["pagenumber"] = page_number
+                            if page_side:
+                                details["pageposition"] = page_side
+                            enriched["details"] = details
+                            self._cache_item(child_uuid, enriched)
+
+                    # Pokud stále chybí číslo nebo strana, zkusíme MODS stránky
+                    if not page_number or not title_text or not page_side:
+                        mods = self.get_mods_metadata(child_uuid)
+                        if mods:
+                            for entry in mods:
+                                label = (entry.get("label") or "").lower()
+                                value = self._clean_text(entry.get("value"))
+                                if not value:
+                                    continue
+                                if label in ("pagenumber", "page number", "pageindex", "page index") and not page_number:
+                                    page_number = value
+                                    self._stat_increment("page_number_from_page_mods")
+                                if label in ("název", "title") and not title_text:
+                                    title_text = value
+                                if label == "pageside" and not page_side:
+                                    page_side = value
+
+                    if page_number:
+                        summary["pageNumber"] = page_number
+                    else:
+                        self._stat_increment("page_number_missing_child")
+                    if title_text:
+                        summary["title"] = title_text
+                    if page_side:
+                        summary["pageSide"] = page_side
                     pages.append(summary)
                 elif depth + 1 <= max_depth:
                     walk(child_uuid, depth + 1)
 
         walk(self._strip_uuid_prefix(book_uuid), 0)
+        self._cache_pages(book_uuid, pages)
         return pages
 
     def get_book_context(self, item_uuid: str) -> Optional[Dict[str, Any]]:
         """Vrátí metadata knihy, seznam stran a aktuální stranu pro zadaný UUID."""
 
+        t_start = time.perf_counter()
+        t_marks: Dict[str, float] = {}
+
         item_data = self.get_item_json(item_uuid)
         if not item_data:
             return None
+        t_marks["item"] = time.perf_counter()
 
         model = item_data.get('model')
         page_data: Optional[Dict[str, Any]] = None
+
+        book_data_future: Optional[Future] = None
+        pages_future: Optional[Future] = None
 
         if model == 'page':
             page_data = item_data
@@ -1417,6 +1830,8 @@ class AltoProcessor:
             if not book_uuid:
                 root_pid = item_data.get('root_pid') or ''
                 book_uuid = self._strip_uuid_prefix(root_pid)
+            book_data_future = _EXECUTOR.submit(self.get_item_json, book_uuid)
+            pages_future = _EXECUTOR.submit(self.collect_book_pages, book_uuid)
         else:
             # Když není stránka a je to rovnou kniha/svazek/číslo, použij ji přímo
             if (model or '').lower() in ('monographunit', 'monograph', 'periodicalitem'):
@@ -1424,38 +1839,63 @@ class AltoProcessor:
             else:
                 # Jiný uzel – zkusíme najít nejbližší knižní předek z contextu
                 book_uuid = self._pick_book_uuid_from_context(item_data) or self._strip_uuid_prefix(item_data.get('pid'))
+            pages_future = _EXECUTOR.submit(self.collect_book_pages, book_uuid)
 
         if not book_uuid:
             return None
 
-        book_data = item_data if model != 'page' else self.get_item_json(book_uuid)
+        if book_data_future:
+            book_data = book_data_future.result()
+        else:
+            book_data = item_data
         if not book_data:
             return None
+        t_marks["book_info"] = time.perf_counter()
 
-        pages = self.collect_book_pages(book_uuid)
-        if not pages:
-            print(f"Pro knihu {book_uuid} se nepodařilo načíst žádné strany")
-
-        page_uuid = self._strip_uuid_prefix((page_data or {}).get('pid')) or self._strip_uuid_prefix(item_uuid)
+        pages = pages_future.result() if pages_future else self.collect_book_pages(book_uuid)
+        t_marks["pages"] = time.perf_counter()
+        # page_uuid: prefer explicit argument when it is a page
+        if model == 'page':
+            page_uuid = self._strip_uuid_prefix(item_uuid)
+        else:
+            page_uuid = self._strip_uuid_prefix((page_data or {}).get('pid')) or self._strip_uuid_prefix(item_uuid)
         if page_data is None and pages:
             page_uuid = pages[0]['uuid']
             page_data = self.get_item_json(page_uuid)
 
         current_index = -1
         if pages:
+            target_uuid = self._strip_uuid_prefix(page_uuid).lower()
             for entry in pages:
-                if entry.get('uuid') == page_uuid:
+                entry_uuid_raw = entry.get('uuid') or ""
+                entry_uuid = self._strip_uuid_prefix(entry_uuid_raw).lower()
+                if entry_uuid == target_uuid:
                     current_index = entry.get('index', pages.index(entry))
                     break
+        # If still not found but pages exist, fallback to first page only when starting from book
+        if current_index < 0 and pages and model != 'page':
+            current_index = 0
+            page_uuid = pages[0]['uuid']
+            page_data = self.get_item_json(page_uuid)
+
+        _debug(f"context summary: item={item_uuid} model={model} book={book_uuid} page={page_uuid} pages_len={len(pages)} current_index={current_index}")
         page_summary = None
         if current_index >= 0:
             page_summary = pages[current_index]
         elif page_data:
+            title_text = self._clean_text(page_data.get('title'))
+            page_number = self._clean_text((page_data.get('details') or {}).get('pagenumber'))
+            if not page_number and title_text and (page_data.get('model') == 'page' or page_data.get('model') is None):
+                page_number = title_text
+            try:
+                print(f"[page-summary-single] pid={page_uuid} title='{title_text}' page_number='{page_number}' model={page_data.get('model')}")
+            except Exception:
+                pass
             page_summary = {
                 "uuid": page_uuid,
                 "index": current_index if current_index >= 0 else 0,
-                "title": self._clean_text(page_data.get('title')),
-                "pageNumber": self._clean_text((page_data.get('details') or {}).get('pagenumber')),
+                "title": title_text,
+                "pageNumber": page_number,
                 "pageType": self._clean_text((page_data.get('details') or {}).get('type')),
                 "pageSide": self._clean_text((page_data.get('details') or {}).get('pageposition') or (page_data.get('details') or {}).get('pagePosition') or (page_data.get('details') or {}).get('pagerole')),
                 "model": page_data.get('model'),
@@ -1465,6 +1905,43 @@ class AltoProcessor:
         resolved_index = current_index if current_index >= 0 else (page_summary.get('index') if page_summary else -1)
 
         book_constants = self.summarize_book_text_format(book_uuid, pages)
+        mods_metadata: List[Dict[str, str]] = []
+        mods_future: Optional[Future] = None
+
+        # Lazy mods: kick off fetch in background; if quick, use result, otherwise return empty and cache will be warmed.
+        try:
+            mods_future = _EXECUTOR.submit(self.get_mods_metadata, book_uuid)
+            mods_metadata = mods_future.result(timeout=2.5)
+            t_marks["mods"] = time.perf_counter()
+        except Exception:
+            mods_metadata = []
+            t_marks["mods"] = time.perf_counter()
+
+        if book_data and not book_data.get('title'):
+            for entry in mods_metadata:
+                if entry.get("label") in ("Název", "Title") and entry.get("value"):
+                    book_data["title"] = entry["value"]
+                    break
+
+        try:
+            _debug(
+                f"context summary: item={item_uuid} model={model} book={book_uuid} page={page_uuid} "
+                f"pages_len={len(pages)} current_index={resolved_index}"
+            )
+            t_end = time.perf_counter()
+            durations = {
+                "item": t_marks.get("item", t_start) - t_start,
+                "book_info": t_marks.get("book_info", t_marks.get("item", t_start)) - t_marks.get("item", t_start),
+                "pages": t_marks.get("pages", t_marks.get("book_info", t_start)) - t_marks.get("book_info", t_start),
+                "mods": t_marks.get("mods", t_marks.get("pages", t_start)) - t_marks.get("pages", t_start),
+                "constants": t_end - t_marks.get("mods", t_marks.get("pages", t_start)),
+            }
+            print("[timing] get_book_context "
+                  f"item={durations['item']:.3f}s book_info={durations['book_info']:.3f}s "
+                  f"pages={durations['pages']:.3f}s mods={durations['mods']:.3f}s "
+                  f"constants={durations['constants']:.3f}s total={t_end - t_start:.3f}s")
+        except Exception:
+            pass
 
         return {
             "book_uuid": book_uuid,
@@ -1473,7 +1950,7 @@ class AltoProcessor:
             "page": page_summary,
             "page_item": page_data,
             "pages": pages,
-            "mods": self.get_mods_metadata(book_uuid),
+            "mods": mods_metadata,
             "current_index": resolved_index,
             "book_constants": book_constants,
             "api_base": self.api_base_url,
@@ -1482,16 +1959,26 @@ class AltoProcessor:
     def get_alto_data(self, uuid: str, api_base_override: Optional[str] = None) -> str:
         """Stáhne ALTO XML data pro daný UUID"""
 
-        normalized = self._strip_uuid_prefix(uuid)
-        if not normalized:
+        raw_uuid = (uuid or "").strip()
+        if not raw_uuid:
             return ""
 
         attempted: List[str] = []
         last_error: Optional[Exception] = None
         for base in self._iter_api_bases(api_base_override):
             attempted.append(base)
-            url = f"{base}/item/uuid:{normalized}/streams/ALTO"
+            version = self._detect_api_version(base)
+            pid = self._format_pid_for_version(raw_uuid, version)
+            if not pid:
+                continue
+            if version == "k7":
+                self._stat_increment("alto_k7")
+                url = f"{base}/items/{pid}/ocr/alto"
+            else:
+                self._stat_increment("alto_k5")
+                url = f"{base}/item/uuid:{pid}/streams/ALTO"
             try:
+                _debug(f"ALTO fetch uuid={raw_uuid} url={url}")
                 response = self.session.get(url, timeout=ALTO_TIMEOUT)
                 response.raise_for_status()
                 self._remember_successful_base(base)
@@ -1911,9 +2398,9 @@ class AltoProcessor:
                 if next_heights is not None and next_heights:
                     next_heights.pop(0)
 
-                print(
-                    f"DEBUG hyphen_merge: merged '{last_token}' + '{next_token}' -> '{merged_token}'"
-                )
+                # _debug(
+                #     f"hyphen_merge: merged '{last_token}' + '{next_token}' -> '{merged_token}'"
+                # )
 
                 line_count = min(len(lines), len(tokens_by_line))
                 index += 1
@@ -1976,8 +2463,8 @@ class AltoProcessor:
                 pairs = list(zip(effective_word_heights, effective_word_lengths, effective_word_tokens))
                 # Remove punctuation-only tokens (no alnum chars)
                 punct_removed = [token for _, _, token in pairs if not any(ch.isalnum() for ch in (token or ""))]
-                if punct_removed:
-                    print(f"DEBUG finalize_block: removing punctuation-only tokens before ratio: {punct_removed}")
+                # if punct_removed:
+                #     _debug(f"finalize_block: removing punctuation-only tokens before ratio: {punct_removed}")
                 pairs = [p for p in pairs if any(ch.isalnum() for ch in (p[2] or ""))]
 
                 heights_for_ratio = [h for h, _, _ in pairs]
@@ -1986,34 +2473,34 @@ class AltoProcessor:
                 # Apply same iterative length-filter logic as used elsewhere: try to ignore very short tokens
                 if pairs and WORD_LENGTH_FILTER_INITIAL > 0:
                     total_pairs = len(pairs)
-                    print(
-                        "DEBUG finalize_block: length-filter precheck total_pairs=%s initial_threshold=%s"
-                        % (total_pairs, WORD_LENGTH_FILTER_INITIAL)
-                    )
+                    # _debug(
+                    #     "finalize_block: length-filter precheck total_pairs=%s initial_threshold=%s"
+                    #     % (total_pairs, WORD_LENGTH_FILTER_INITIAL)
+                    # )
                     for length_threshold in range(WORD_LENGTH_FILTER_INITIAL, 0, -1):
                         filtered = [h for h, length, _ in pairs if length > length_threshold]
                         filtered_count = len(filtered)
                         ignored_count = total_pairs - filtered_count
-                        print(
-                            "DEBUG finalize_block: try length>%s -> kept=%s ignored=%s min_required>%s"
-                            % (
-                                length_threshold,
-                                filtered_count,
-                                ignored_count,
-                                WORD_LENGTH_FILTER_MIN_WORDS,
-                            )
-                        )
+                        # _debug(
+                        #     "finalize_block: try length>%s -> kept=%s ignored=%s min_required>%s"
+                        #     % (
+                        #         length_threshold,
+                        #         filtered_count,
+                        #         ignored_count,
+                        #         WORD_LENGTH_FILTER_MIN_WORDS,
+                        #     )
+                        # )
                         if filtered_count > WORD_LENGTH_FILTER_MIN_WORDS:
                             heights_for_ratio = filtered
                             applied_length_filter = length_threshold
                             ignored_tokens = [token for _, length, token in pairs if length <= length_threshold]
-                            print(
-                                "DEBUG finalize_block: applying length filter>%s; ignored_tokens=%s"
-                                % (length_threshold, ignored_tokens)
-                            )
+                            # _debug(
+                            #     "DEBUG finalize_block: applying length filter>%s; ignored_tokens=%s"
+                            #     % (length_threshold, ignored_tokens)
+                            # )
                             break
-                    if applied_length_filter is None:
-                        print("DEBUG finalize_block: no length filter applied; using all words")
+                    # if applied_length_filter is None:
+                    #     _debug("DEBUG finalize_block: no length filter applied; using all words")
 
                 count_above_h1 = sum(1 for h in heights_for_ratio if h >= average_height * HEADING_H1_RATIO)
                 count_above_h2 = sum(1 for h in heights_for_ratio if h >= average_height * HEADING_H2_RATIO)
@@ -2025,9 +2512,9 @@ class AltoProcessor:
                     # single-word fragments (often caused by layout splits) being misclassified as h2/h1.
                     if block_data.get('split_reason') == 'horizontal_indent' and total_words < 3:
                         tag = 'p'
-                        print(
-                            f"DEBUG finalize_block: prevented promoting to h1/h2 due to negative-split and total_words={total_words} < 3"
-                        )
+                        # _debug(
+                        #     f"DEBUG finalize_block: prevented promoting to h1/h2 due to negative-split and total_words={total_words} < 3"
+                        # )
                     # Additional guard: if the fragment starts with any quote-like character,
                     # it's very likely a continuation/dialogue line (OCR often puts opening
                     # quotes on a wrapped line). Such lines should not be promoted to headings.
@@ -2038,40 +2525,40 @@ class AltoProcessor:
                         quote_chars = set('"' + "'“”‹›«»‚‛‟`´ʺʹ")
                         if leading and leading in quote_chars:
                             tag = 'p'
-                            print(f"DEBUG finalize_block: prevented promoting to h1/h2 because fragment starts with quote '{leading}' and split_reason=horizontal_indent")
+                            # _debug(f"DEBUG finalize_block: prevented promoting to h1/h2 because fragment starts with quote '{leading}' and split_reason=horizontal_indent")
                         else:
                             # fall through to normal heading checks below
                             pass
                     else:
                         if count_above_h1 / total_words >= min_ratio:
                             tag = 'h1'
-                            print(f"DEBUG finalize_block: changed to h1, count_above_h1={count_above_h1}, total_words={total_words}, ratio={count_above_h1 / total_words:.3f} >= {min_ratio:.3f}")
+                            # _debug(f"DEBUG finalize_block: changed to h1, count_above_h1={count_above_h1}, total_words={total_words}, ratio={count_above_h1 / total_words:.3f} >= {min_ratio:.3f}")
                         elif count_above_h2 / total_words >= min_ratio:
                             tag = 'h2'
-                            print(f"DEBUG finalize_block: changed to h2, count_above_h2={count_above_h2}, total_words={total_words}, ratio={count_above_h2 / total_words:.3f} >= {min_ratio:.3f}")
+                            # _debug(f"DEBUG finalize_block: changed to h2, count_above_h2={count_above_h2}, total_words={total_words}, ratio={count_above_h2 / total_words:.3f} >= {min_ratio:.3f}")
                         else:
                             tag = 'p'
-                            print(f"DEBUG finalize_block: stayed p, count_above_h1={count_above_h1}, count_above_h2={count_above_h2}, total_words={total_words}, min_ratio={min_ratio:.3f}")
+                            # _debug(f"DEBUG finalize_block: stayed p, count_above_h1={count_above_h1}, count_above_h2={count_above_h2}, total_words={total_words}, min_ratio={min_ratio:.3f}")
                 else:
                     tag = 'p'
 
                 # Debug print for block details
-                print(
-                    "DEBUG finalize_block: text='%s...', tag=%s, max_font=%s, average_height=%s, word_heights=%s, "
-                    "count_above_h1=%s, count_above_h2=%s, total_words=%s, min_ratio=%.3f, length_filter=%s"
-                    % (
-                        text_content[:100],
-                        tag,
-                        max_font,
-                        average_height,
-                        heights_for_ratio,
-                        count_above_h1,
-                        count_above_h2,
-                        total_words,
-                        min_ratio,
-                        applied_length_filter,
-                    )
-                )
+                # _debug(
+                #     "DEBUG finalize_block: text='%s...', tag=%s, max_font=%s, average_height=%s, word_heights=%s, "
+                #     "count_above_h1=%s, count_above_h2=%s, total_words=%s, min_ratio=%.3f, length_filter=%s"
+                #     % (
+                #         text_content[:100],
+                #         tag,
+                #         max_font,
+                #         average_height,
+                #         heights_for_ratio,
+                #         count_above_h1,
+                #         count_above_h2,
+                #         total_words,
+                #         min_ratio,
+                #         applied_length_filter,
+                #     )
+                # )
 
             blocks.append({
                 'text': text_content,
@@ -2106,7 +2593,7 @@ class AltoProcessor:
 
             # Do not merge if either block was split due to gap or shift
             if first_block.get('split_reason') or second_block.get('split_reason'):
-                print(f"DEBUG should_merge: not merging due to split_reason: first={first_block.get('split_reason')}, second={second_block.get('split_reason')}")
+                # _debug(f"DEBUG should_merge: not merging due to split_reason: first={first_block.get('split_reason')}, second={second_block.get('split_reason')}")
                 return False
 
             first_source = first_block.get('source_block_id')
@@ -2133,7 +2620,7 @@ class AltoProcessor:
             if relative_diff > HEADING_FONT_MERGE_TOLERANCE:
                 return False
 
-            print(f"DEBUG should_merge: merging blocks")
+            # _debug(f"DEBUG should_merge: merging blocks")
             return True
 
         def merge_heading_pair(first_block: Dict[str, Any], second_block: Dict[str, Any]) -> Dict[str, Any]:
@@ -2270,7 +2757,7 @@ class AltoProcessor:
         if not text_blocks:
             text_blocks = root.findall('.//{http://www.loc.gov/standards/alto/ns-v2#}TextBlock')
 
-        print(f"DEBUG: Found {len(text_blocks)} TextBlocks")
+        # _debug(f"DEBUG: Found {len(text_blocks)} TextBlocks")
 
         if page_number_value or page_number_original:
             primary_annotation_added = False
@@ -2356,9 +2843,9 @@ class AltoProcessor:
                 else:
                     short_threshold = None
 
-                print(
-                    f"DEBUG page-number: total_lines={len(line_entries)}, reference_width={reference_width}, short_threshold={short_threshold}"
-                )
+                # _debug(
+                #     f"DEBUG page-number: total_lines={len(line_entries)}, reference_width={reference_width}, short_threshold={short_threshold}"
+                # )
 
                 target_has_letters = any(ch.isalpha() for ch in page_number_value) if page_number_value else False
 
@@ -2376,14 +2863,14 @@ class AltoProcessor:
                     for entry in sorted_entries:
                         width = entry.get('effective_width', entry['width'])
                         if width <= 0 or width > short_threshold:
-                            print(
-                                f"DEBUG page-number: skipping line width={width} vpos={entry['vpos']} text='{entry['text']}'"
-                            )
+                            # _debug(
+                            #     f"DEBUG page-number: skipping line width={width} vpos={entry['vpos']} text='{entry['text']}'"
+                            # )
                             continue
 
                         text_value = entry['text']
                         if not text_value:
-                            print(
+                            _debug(
                                 f"DEBUG page-number: skipping empty text for width={width} vpos={entry['vpos']}"
                             )
                             continue
@@ -2393,7 +2880,7 @@ class AltoProcessor:
                             alpha_count = sum(1 for ch in nonspace_chars if ch.isalpha())
                             total_chars = len(nonspace_chars)
                             if alpha_count >= PAGE_NUMBER_ALPHA_REJECTION_RATIO * total_chars:
-                                print(
+                                _debug(
                                     "DEBUG page-number: rejecting line due to alpha ratio "
                                     f"alpha={alpha_count} total={total_chars} width={width} "
                                     f"vpos={entry['vpos']} text='{text_value}'"
@@ -2401,9 +2888,9 @@ class AltoProcessor:
                                 continue
 
                         if pattern.search(text_value):
-                            print(
-                                f"DEBUG page-number: FOUND match width={width} vpos={entry['vpos']} text='{text_value}'"
-                            )
+                            # _debug(
+                            #     f"DEBUG page-number: FOUND match width={width} vpos={entry['vpos']} text='{text_value}'"
+                            # )
                             matches.append(entry)
                             number_found = True
                             suspects.clear()
@@ -2416,12 +2903,12 @@ class AltoProcessor:
                             has_other_alnum = bool(re.search(r"[0-9A-Za-z]", surrounding_text))
                             is_pure_secondary = not has_other_alnum
                             if is_pure_secondary:
-                                print(
+                                _debug(
                                     f"DEBUG page-number: secondary detected (pure) vpos={entry['vpos']} text='{text_value}'"
                                 )
                                 page_number_line_ids.add(id(entry['element']))
                             else:
-                                print(
+                                _debug(
                                     f"DEBUG page-number: secondary candidate vpos={entry['vpos']} text='{text_value}'"
                                 )
                             secondary_entries.append({
@@ -2432,10 +2919,10 @@ class AltoProcessor:
 
                         stripped_value = text_value.strip()
                         if re.fullmatch(r"\d{1,4}", stripped_value):
-                            print(
-                                "DEBUG page-number: secondary numeric candidate "
-                                f"vpos={entry['vpos']} text='{text_value}'"
-                            )
+                            # _debug(
+                            #     "DEBUG page-number: secondary numeric candidate "
+                            #     f"vpos={entry['vpos']} text='{text_value}'"
+                            # )
                             # Mark simple numeric lines as pure secondary candidates and
                             # keep the original entry so we can promote it to primary later
                             secondary_entries.append({
@@ -2446,7 +2933,7 @@ class AltoProcessor:
                             continue
 
                         if not number_found:
-                            print(
+                            _debug(
                                 f"DEBUG page-number: candidate width={width} vpos={entry['vpos']} text='{text_value}'"
                             )
                             suspects.append(entry)
@@ -2460,9 +2947,9 @@ class AltoProcessor:
                         sec = secondary_entries[0]
                         if sec.get('is_pure') and sec.get('entry'):
                             promoted_entry = sec['entry']
-                            print(
-                                f"DEBUG page-number: promoting single pure secondary '{sec.get('text')}' to primary candidate vpos={promoted_entry['vpos']}"
-                            )
+                            # _debug(
+                            #     f"DEBUG page-number: promoting single pure secondary '{sec.get('text')}' to primary candidate vpos={promoted_entry['vpos']}"
+                            # )
                             candidates = [promoted_entry]
                             # Remove the promoted secondary so it won't be reported again
                             secondary_entries.clear()
@@ -2471,9 +2958,9 @@ class AltoProcessor:
                                 page_number_line_ids.add(id(promoted_entry['element']))
                             except Exception:
                                 pass
-                    print(
-                        f"DEBUG page-number: matches={len(matches)}, suspects={len(suspects)}, using_candidates={len(candidates)}"
-                    )
+                    # _debug(
+                    #     f"DEBUG page-number: matches={len(matches)}, suspects={len(suspects)}, using_candidates={len(candidates)}"
+                    # )
 
                     if candidates:
                         annotation_is_found = bool(matches)
@@ -2496,10 +2983,10 @@ class AltoProcessor:
                             )
                             primary_annotation_added = True
                     else:
-                        print("DEBUG page-number: no candidates detected after scanning")
+                        _debug("DEBUG page-number: no candidates detected after scanning")
 
                 else:
-                    print("DEBUG page-number: cannot compute short_threshold due to missing page width")
+                    _debug("DEBUG page-number: cannot compute short_threshold due to missing page width")
 
                 if not primary_annotation_added:
                     reference_height_local = alto_height2 or alto_height
@@ -2512,9 +2999,9 @@ class AltoProcessor:
                         )
                     )
                     primary_annotation_added = True
-                    print(
-                        "DEBUG page-number: appended fallback annotation due to missing candidates"
-                    )
+                    # _debug(
+                    #     "DEBUG page-number: appended fallback annotation due to missing candidates"
+                    # )
 
             else:
                 reference_height_local = alto_height2 or alto_height
@@ -2533,7 +3020,7 @@ class AltoProcessor:
                             f"<note{PAGE_NOTE_STYLE_ATTR}>{html.escape(annotation_text, quote=False)}</note>"
                         )
                     )
-                    print("DEBUG page-number: skipped detection for non-numeric metadata")
+                    # _debug("DEBUG page-number: skipped detection for non-numeric metadata")
                 primary_annotation_added = True
 
             if secondary_entries:
@@ -2621,7 +3108,7 @@ class AltoProcessor:
                 if total_chars > 0 and largest_chars / total_chars <= HEADING_FONT_MAX_RATIO:
                     heading_fonts.append(largest_size)
 
-        print(f"DEBUG: heading_fonts={heading_fonts}, font_counts={dict(font_counts)}")
+        # _debug(f"DEBUG: heading_fonts={heading_fonts}, font_counts={dict(font_counts)}")
 
         for block_elem in text_blocks:
             text_lines = block_elem.findall('.//{http://www.loc.gov/standards/alto/ns-v3#}TextLine')
@@ -2752,15 +3239,15 @@ class AltoProcessor:
 
             # overall center decision (used for debugging fallback)
             is_center_aligned = (all(abs(center - median_center) <= margin_median for center in line_centers) or all(abs(center - page_center) <= margin_center for center in line_centers)) and widths_vary_overall
-            print(f"DEBUG: line_heights={line_heights}")
-            print(f"DEBUG: line_widths={line_widths}")
-            print(f"DEBUG: vertical_gaps={vertical_gaps}, horizontal_shifts={horizontal_shifts}")
-            print(f"DEBUG: median_height={median_height}, median_width={median_width}, median_gap={median_gap}, median_shift={median_shift}")
-            print(f"DEBUG: trimmed_shifts={trimmed_shifts}")
-            print(f"DEBUG: vertical_threshold_candidates={vertical_threshold_candidates}, horizontal_threshold_candidates={horizontal_threshold_candidates}")
-            print(f"DEBUG: vertical_threshold={vertical_threshold}, horizontal_threshold={horizontal_threshold}")
-            print(f"DEBUG: heading_fonts={heading_fonts}, font_counts={dict(font_counts)}")
-            print(f"DEBUG: is_center_aligned={is_center_aligned}")
+            # _debug(f"DEBUG: line_heights={line_heights}")
+            # _debug(f"DEBUG: line_widths={line_widths}")
+            # _debug(f"DEBUG: vertical_gaps={vertical_gaps}, horizontal_shifts={horizontal_shifts}")
+            # _debug(f"DEBUG: median_height={median_height}, median_width={median_width}, median_gap={median_gap}, median_shift={median_shift}")
+            # _debug(f"DEBUG: trimmed_shifts={trimmed_shifts}")
+            # _debug(f"DEBUG: vertical_threshold_candidates={vertical_threshold_candidates}, horizontal_threshold_candidates={horizontal_threshold_candidates}")
+            # _debug(f"DEBUG: vertical_threshold={vertical_threshold}, horizontal_threshold={horizontal_threshold}")
+            # _debug(f"DEBUG: heading_fonts={heading_fonts}, font_counts={dict(font_counts)}")
+            # _debug(f"DEBUG: is_center_aligned={is_center_aligned}")
 
             # Now split the TextBlock into vertical subgroups using the computed vertical_threshold
             groups: List[List[dict]] = []
@@ -2825,7 +3312,7 @@ class AltoProcessor:
                     centers_grp = [r['hpos'] + r['width'] / 2 for r in groups[gidx]] if gidx is not None and gidx < len(groups) else []
                     median_center_grp = statistics.median(centers_grp) if centers_grp else None
                     median_width_grp = statistics.median([r['width'] for r in groups[gidx]]) if gidx is not None and gidx < len(groups) and groups[gidx] else None
-                    print(
+                    _debug(
                         f"DEBUG-INTEREST idx={ridx} text='{snippet[:80]}...' group={gidx} group_centered={group_cent} median_center_grp={median_center_grp} median_width_grp={median_width_grp} vertical_threshold={vertical_threshold} horizontal_threshold={horizontal_threshold}"
                     )
 
@@ -2886,9 +3373,9 @@ class AltoProcessor:
 
                 if last_bottom is not None:
                     v_diff = text_line_vpos - last_bottom
-                    print(f"DEBUG: v_diff={v_diff}, vertical_threshold={vertical_threshold}")
+                    # _debug(f"DEBUG: v_diff={v_diff}, vertical_threshold={vertical_threshold}")
                     if v_diff > vertical_threshold:
-                        print(f"DEBUG: Splitting on v_diff={v_diff} > {vertical_threshold}")
+                        # _debug(f"DEBUG: Splitting on v_diff={v_diff} > {vertical_threshold}")
                         # Velká vertikální mezera = nový blok textu
                         if current_block['lines']:
                             current_block['split_reason'] = 'vertical_gap'
@@ -2925,7 +3412,7 @@ class AltoProcessor:
 
                 for string_el in strings:
                     style = string_el.get('STYLE', '')
-                    print(f"DEBUG line_all_bold check: style='{style}', 'bold' in style={ 'bold' in style}")
+                    # _debug(f"DEBUG line_all_bold check: style='{style}', 'bold' in style={ 'bold' in style}")
                     if not style or 'bold' not in style:
                         line_all_bold = False
 
@@ -3004,9 +3491,9 @@ class AltoProcessor:
 
                 text_line_effective_left = compute_effective_left(current_line_token_texts, current_line_token_hpos, text_line_hpos)
                 previous_left = last_left
-                print(
-                    f"DEBUG: Processing line at hpos={text_line_hpos} (effective_left={text_line_effective_left}), previous_left={previous_left}, line_text='{line_text[:50]}...'"
-                )
+                # _debug(
+                #     f"DEBUG: Processing line at hpos={text_line_hpos} (effective_left={text_line_effective_left}), previous_left={previous_left}, line_text='{line_text[:50]}...'"
+                # )
 
                 if not line_text:
                     last_left = text_line_hpos
@@ -3057,14 +3544,14 @@ class AltoProcessor:
                         # previous_left is a simple number (line hpos); try to use stored effective if available
                         left_for_prev = previous_left
                     h_diff = text_line_effective_left - left_for_prev
-                    print(
-                        f"DEBUG: h_diff={h_diff}, horizontal_threshold={horizontal_threshold}, font_size_differs={font_size_differs}, effective_prev_left={left_for_prev}, effective_cur_left={text_line_effective_left}"
-                    )
+                    # _debug(
+                    #     f"DEBUG: h_diff={h_diff}, horizontal_threshold={horizontal_threshold}, font_size_differs={font_size_differs}, effective_prev_left={left_for_prev}, effective_cur_left={text_line_effective_left}"
+                    # )
 
                     if h_diff > horizontal_threshold or font_size_differs:
-                        print(
-                            f"DEBUG: Horizontal split on h_diff={h_diff} > {horizontal_threshold} or font_size_differs={font_size_differs}"
-                        )
+                        # _debug(
+                        #     f"DEBUG: Horizontal split on h_diff={h_diff} > {horizontal_threshold} or font_size_differs={font_size_differs}"
+                        # )
                         if current_block['lines']:
                             current_block['split_reason'] = 'horizontal_shift'
                             finalize_block(
@@ -3083,9 +3570,9 @@ class AltoProcessor:
                         current_block = new_block_state(centered=next_centered)
                         lines = 0
                     elif h_diff < 0 and abs(h_diff) > horizontal_threshold * NEGATIVE_SHIFT_MULTIPLIER and current_block['lines']:
-                        print(
-                            f"DEBUG: Negative split on h_diff={h_diff}, abs(h_diff)={abs(h_diff)} > {horizontal_threshold * NEGATIVE_SHIFT_MULTIPLIER}"
-                        )
+                        # _debug(
+                        #     f"DEBUG: Negative split on h_diff={h_diff}, abs(h_diff)={abs(h_diff)} > {horizontal_threshold * NEGATIVE_SHIFT_MULTIPLIER}"
+                        # )
                         if len(current_block['lines']) > 1:
                             for idx, previous_line in enumerate(current_block['lines'][:-1]):
                                 line_font_size = (
@@ -3233,10 +3720,10 @@ class AltoProcessor:
                             current_block['all_bold'] = last_bold_flag
                             lines = 1
                 elif should_split_center:
-                    print(
-                        "DEBUG: Center-aligned block split due to font/height difference: "
-                        f"font_size_ratio={font_size_ratio}, height_ratio={height_ratio}"
-                    )
+                    # _debug(
+                    #     "DEBUG: Center-aligned block split due to font/height difference: "
+                    #     f"font_size_ratio={font_size_ratio}, height_ratio={height_ratio}"
+                    # )
                     # remember whether current block was centered so the new block can inherit it
                     was_centered = bool(current_block.get('centered', False))
                     current_block['split_reason'] = 'center_font_change'
@@ -3298,7 +3785,7 @@ class AltoProcessor:
 
         # After all blocks are finalized, apply the new logic for h3 detection based on bold paragraphs and neighbors
         for i, block in enumerate(blocks):
-            print(f"DEBUG post-processing: block '{block['text'][:50]}...', tag={block['tag']}, all_bold={block.get('all_bold', False)}")
+            # _debug(f"post-processing: block '{block['text'][:50]}...', tag={block['tag']}, all_bold={block.get('all_bold', False)}")
             if block['tag'] == 'p' and block.get('all_bold', False):
                 prev_block = blocks[i - 1] if i > 0 else None
                 next_block = blocks[i + 1] if i < len(blocks) - 1 else None
@@ -3313,7 +3800,7 @@ class AltoProcessor:
                     return False
 
                 if is_heading_or_nonbold_p(prev_block) and is_heading_or_nonbold_p(next_block) and not (prev_block is None and next_block is None):
-                    print(f"DEBUG post-processing: changing block '{block['text'][:50]}...' to h3")
+                    # _debug(f"DEBUG post-processing: changing block '{block['text'][:50]}...' to h3")
                     block['tag'] = 'h3'
 
         if average_height is not None:
@@ -3336,8 +3823,8 @@ class AltoProcessor:
 
                 # Remove punctuation-only tokens
                 punct_removed = [t for _, _, t in pairs if not any(ch.isalnum() for ch in (t or ""))]
-                if punct_removed:
-                    print(f"DEBUG small: removing punctuation-only tokens before ratio: {punct_removed}")
+                # if punct_removed:
+                #     _debug(f"small: removing punctuation-only tokens before ratio: {punct_removed}")
                 pairs = [p for p in pairs if any(ch.isalnum() for ch in (p[2] or ""))]
                 if not pairs:
                     continue
@@ -3347,31 +3834,31 @@ class AltoProcessor:
                 applied_length_filter_small = None
                 if pairs and WORD_LENGTH_FILTER_INITIAL > 0:
                     total_pairs = len(pairs)
-                    print(
-                        "DEBUG small: length-filter precheck total_pairs=%s initial_threshold=%s"
-                        % (total_pairs, WORD_LENGTH_FILTER_INITIAL)
-                    )
+                    # _debug(
+                    #     "DEBUG small: length-filter precheck total_pairs=%s initial_threshold=%s"
+                    #     % (total_pairs, WORD_LENGTH_FILTER_INITIAL)
+                    # )
                     for length_threshold in range(WORD_LENGTH_FILTER_INITIAL, 0, -1):
                         filtered = [h for h, length, _ in pairs if length > length_threshold]
                         filtered_count = len(filtered)
                         ignored_count = total_pairs - filtered_count
-                        print(
-                            "DEBUG small: try length>%s -> kept=%s ignored=%s min_required>%s"
-                            % (
-                                length_threshold,
-                                filtered_count,
-                                ignored_count,
-                                WORD_LENGTH_FILTER_MIN_WORDS,
-                            )
-                        )
+                        # _debug(
+                        #     "DEBUG small: try length>%s -> kept=%s ignored=%s min_required>%s"
+                        #     % (
+                        #         length_threshold,
+                        #         filtered_count,
+                        #         ignored_count,
+                        #         WORD_LENGTH_FILTER_MIN_WORDS,
+                        #     )
+                        # )
                         if filtered_count > WORD_LENGTH_FILTER_MIN_WORDS:
                             heights_for_small = filtered
                             applied_length_filter_small = length_threshold
                             ignored_tokens = [token for _, length, token in pairs if length <= length_threshold]
-                            print(
-                                "DEBUG small: applying length filter>%s; ignored_tokens=%s"
-                                % (length_threshold, ignored_tokens)
-                            )
+                            # _debug(
+                            #     "DEBUG small: applying length filter>%s; ignored_tokens=%s"
+                            #     % (length_threshold, ignored_tokens)
+                            # )
                             break
 
                 valid_word_heights = list(heights_for_small)
@@ -3393,11 +3880,11 @@ class AltoProcessor:
 
                 if small_ratio_value >= ratio_threshold:
                     block['tag'] = 'small'
-                    print(
-                        "DEBUG small demotion: demoted to <small>, "
-                        f"source_tag={original_tag}, ratio={small_ratio_value:.3f}, "
-                        f"required_ratio={ratio_threshold:.3f}, threshold={small_height_threshold:.2f}"
-                    )
+                    # _debug(
+                    #     "DEBUG small demotion: demoted to <small>, "
+                    #     f"source_tag={original_tag}, ratio={small_ratio_value:.3f}, "
+                    #     f"required_ratio={ratio_threshold:.3f}, threshold={small_height_threshold:.2f}"
+                    # )
 
         # Generování HTML - přesně jako v TypeScript
         result = ""
@@ -3468,3 +3955,18 @@ def main():
 
 if __name__ == "__main__":
     main()
+    def _stat_report(self) -> str:
+        s = self._request_stats
+        return (
+            f"iiif_manifest={s.get('iiif_manifest', 0)} "
+            f"iiif_manifest_fail={s.get('iiif_manifest_fail', 0)} "
+            f"pages_cache_hit={s.get('pages_cache_hit', 0)} "
+            f"pages_cache_miss={s.get('pages_cache_miss', 0)} "
+            f"info_k7={s.get('info_k7', 0)} info_cache_hit={s.get('info_cache_hit', 0)} info_cache_miss={s.get('info_cache_miss', 0)} "
+            f"children_k7={s.get('children_k7', 0)} children_cache_hit={s.get('children_cache_hit', 0)} children_cache_miss={s.get('children_cache_miss', 0)} "
+            f"mods_k7={s.get('mods_k7', 0)} mods_cache_hit={s.get('mods_cache_hit', 0)} mods_cache_miss={s.get('mods_cache_miss', 0)} "
+            f"alto_k7={s.get('alto_k7', 0)} "
+            f"page_num_info={s.get('page_number_from_page_info', 0)} "
+            f"page_num_mods={s.get('page_number_from_page_mods', 0)} "
+            f"page_num_missing_child={s.get('page_number_missing_child', 0)}"
+        )

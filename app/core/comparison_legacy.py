@@ -64,6 +64,11 @@ if 'default_model' not in MODEL_REGISTRY or not isinstance(MODEL_REGISTRY['defau
 MODEL_REGISTRY_JSON = json.dumps(MODEL_REGISTRY, ensure_ascii=False)
 
 KNOWN_LIBRARY_OVERRIDES: Dict[str, Dict[str, str]] = {
+    "https://api.kramerius.mzk.cz/search/api/client/v7.0": {
+        "code": "mzk",
+        "label": "Moravská zemská knihovna v Brně",
+        "handle_base": "https://kramerius.mzk.cz/search",
+    },
     "https://kramerius.mzk.cz/search/api/v5.0": {
         "code": "mzk",
         "label": "Moravská zemská knihovna v Brně",
@@ -1068,6 +1073,7 @@ def describe_library(api_base: Optional[str]) -> Dict[str, str]:
             'api_base': '',
             'handle_base': '',
             'netloc': '',
+            'version': '',
         }
 
     override = KNOWN_LIBRARY_OVERRIDES.get(normalized, {})
@@ -1075,6 +1081,12 @@ def describe_library(api_base: Optional[str]) -> Dict[str, str]:
     parsed = urlparse(handle_base or normalized)
     label = override.get('label') or (parsed.netloc or normalized)
     code = override.get('code') or (parsed.netloc.split('.', 1)[0] if parsed.netloc else '')
+    version = ''
+    low = normalized.lower()
+    if 'api/client/v7.0' in low:
+        version = 'K7'
+    elif 'search/api/v5.0' in low:
+        version = 'K5'
 
     return {
         'label': label,
@@ -1082,6 +1094,7 @@ def describe_library(api_base: Optional[str]) -> Dict[str, str]:
         'api_base': normalized,
         'handle_base': handle_base,
         'netloc': parsed.netloc or '',
+        'version': version,
     }
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):

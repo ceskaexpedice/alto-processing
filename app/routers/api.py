@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from xml.dom import minidom
+import time
 
 from ..core.agent_runner import AgentRunnerError, run_agent as run_agent_via_responses
 from ..core.comparison_legacy import (
@@ -159,8 +160,11 @@ def process_page(uuid: str = Query(...), api_base: Optional[str] = Query(None)) 
         return _json_error("UUID je povinný", status_code=400)
 
     try:
+        t_start = time.perf_counter()
         processor = AltoProcessor(api_base_url=api_base)
+        processor.reset_request_stats()
         context = processor.get_book_context(uuid)
+        t_after_context = time.perf_counter()
         if not context:
             return _json_error("Nepodařilo se načíst metadata pro zadané UUID", status_code=404)
 
@@ -174,12 +178,14 @@ def process_page(uuid: str = Query(...), api_base: Optional[str] = Query(None)) 
         book_uuid = context.get("book_uuid")
 
         alto_xml = processor.get_alto_data(page_uuid)
+        t_after_alto = time.perf_counter()
         if not alto_xml:
             return _json_error("Nepodařilo se stáhnout ALTO data", status_code=502)
 
         pretty_alto = minidom.parseString(alto_xml).toprettyxml(indent="  ")
         python_result = processor.get_formatted_text(alto_xml, page_uuid, DEFAULT_WIDTH, DEFAULT_HEIGHT)
         typescript_result = simulate_typescript_processing(alto_xml, page_uuid, DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        t_after_processing = time.perf_counter()
 
         pages = context.get("pages") or []
         current_index = context.get("current_index", -1)
@@ -248,13 +254,59 @@ def process_page(uuid: str = Query(...), api_base: Optional[str] = Query(None)) 
             "alto_xml": pretty_alto,
             "library": library_info,
         }
+
+        try:
+            stats = processor.get_request_stats()
+            total_requests = (
+                stats.get("info_k7", 0)
+                + stats.get("info_k5", 0)
+                + stats.get("children_k7", 0)
+                + stats.get("children_k5", 0)
+                + stats.get("mods_k7", 0)
+                + stats.get("mods_k5", 0)
+                + stats.get("alto_k7", 0)
+                + stats.get("alto_k5", 0)
+                + stats.get("iiif_manifest", 0)
+            )
+            summary_parts = [
+                f"total={total_requests}",
+                f"timing_context={t_after_context - t_start:.3f}s",
+                f"timing_alto={t_after_alto - t_after_context:.3f}s",
+                f"timing_process={t_after_processing - t_after_alto:.3f}s",
+                f"timing_total={t_after_processing - t_start:.3f}s",
+                f"iiif_manifest={stats.get('iiif_manifest', 0)}",
+                f"iiif_manifest_fail={stats.get('iiif_manifest_fail', 0)}",
+                f"info_k7={stats.get('info_k7', 0)}",
+                f"info_k5={stats.get('info_k5', 0)}",
+                f"info_cache_hit={stats.get('info_cache_hit', 0)}",
+                f"info_cache_miss={stats.get('info_cache_miss', 0)}",
+                f"children_k7={stats.get('children_k7', 0)}",
+                f"children_k5={stats.get('children_k5', 0)}",
+                f"children_cache_hit={stats.get('children_cache_hit', 0)}",
+                f"children_cache_miss={stats.get('children_cache_miss', 0)}",
+                f"mods_k7={stats.get('mods_k7', 0)}",
+                f"mods_k5={stats.get('mods_k5', 0)}",
+                f"mods_cache_hit={stats.get('mods_cache_hit', 0)}",
+                f"mods_cache_miss={stats.get('mods_cache_miss', 0)}",
+                f"alto_k7={stats.get('alto_k7', 0)}",
+                f"alto_k5={stats.get('alto_k5', 0)}",
+                f"page_num_child={stats.get('page_number_from_child', 0)}",
+                f"page_num_info={stats.get('page_number_from_page_info', 0)}",
+                f"page_num_mods={stats.get('page_number_from_page_mods', 0)}",
+                f"page_num_missing_child={stats.get('page_number_missing_child', 0)}",
+                f"fallback_manifest_to_api={stats.get('fallback_manifest_to_api', 0)}",
+            ]
+            print("[kramerius-stats] " + " ".join(summary_parts))
+        except Exception:
+            pass
+
         return JSONResponse(response_data)
     except Exception as exc:
         return _json_error(str(exc), status_code=500)
 
 
 @router.get("/preview")
-def preview_image(uuid: str = Query(...), stream: str = Query("IMG_PREVIEW")) -> Response:
+def preview_image(uuid: str = Query(...), stream: str = Query("IMG_PREVIEW"), api_base: Optional[str] = Query(None)) -> Response:
     if not uuid:
         return _json_error("UUID je povinný", status_code=400)
 
@@ -266,12 +318,24 @@ def preview_image(uuid: str = Query(...), stream: str = Query("IMG_PREVIEW")) ->
     if stream == "AUTO":
         candidate_streams = ["IMG_FULL", "IMG_PREVIEW", "IMG_THUMB"]
 
-    candidate_bases = list(dict.fromkeys(DEFAULT_API_BASES))
+    candidate_bases = list(dict.fromkeys([base for base in [api_base] + DEFAULT_API_BASES if base]))
     last_error = None
 
     for candidate in candidate_streams:
         for base in candidate_bases:
-            upstream_url = f"{base}/item/uuid:{uuid}/streams/{candidate}"
+            version = AltoProcessor._detect_api_version(base)
+            pid = AltoProcessor._format_pid_for_version(uuid, version)
+            if not pid:
+                continue
+            if version == "k7":
+                path = "image"
+                if candidate == "IMG_THUMB":
+                    path = "image/thumb"
+                elif candidate == "IMG_PREVIEW":
+                    path = "image/preview"
+                upstream_url = f"{base}/items/{pid}/{path}"
+            else:
+                upstream_url = f"{base}/item/uuid:{pid}/streams/{candidate}"
             try:
                 response = requests.get(upstream_url, timeout=20)
             except Exception as exc:

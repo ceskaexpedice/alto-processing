@@ -674,6 +674,7 @@
         }
         .form-group.uuid-group {
             width: 100%;
+            margin-top: 12px;
         }
         .uuid-input-group {
             display: flex;
@@ -1494,6 +1495,10 @@
                     <h1>ALTO Processing Comparison</h1>
                     <p>Ukázka způsobů zpracování formátovaného textu ze stránek knih.</p>
 
+                    <div class="form-group">
+                        <label for="api-base">Kramerius API URL:</label>
+                        <input type="text" id="api-base" name="api-base" value="https://api.kramerius.mzk.cz/search/api/client/v7.0" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+                    </div>
                     <div class="form-group uuid-group">
                         <label for="uuid">UUID stránky nebo dokumentu:</label>
                         <div class="uuid-input-group">
@@ -1634,13 +1639,19 @@
                         <div id="agent-select-spinner" title="Načítám agenty" style="margin-left:8px;display:none;">
                             <span class="inline-spinner" aria-hidden="true"></span>
                         </div>
-                        <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-                            <label style="display:inline-flex;align-items:center;gap:6px;">
-                                <input id="agent-auto-correct" type="checkbox">
-                                <span style="font-size:13px;">Automaticky opravovat</span>
+                        <div style="margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <label style="display:inline-flex;align-items:center;gap:6px;">
+                                    <input id="agent-auto-correct" type="checkbox">
+                                    <span style="font-size:13px;">Automaticky opravovat</span>
+                                </label>
+                                <button id="agent-run" type="button" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 12px;">Oprav</button>
+                                <button id="agent-expand-toggle" type="button" aria-expanded="false" title="Zobrazit nastavení agenta" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;">⚙️</button>
+                            </div>
+                            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;">
+                                <input id="agent-ignore-format" type="checkbox">
+                                <span>Ignorovat formát</span>
                             </label>
-                            <button id="agent-run" type="button" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 12px;">Oprav</button>
-                            <button id="agent-expand-toggle" type="button" aria-expanded="false" title="Zobrazit nastavení agenta" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;">⚙️</button>
                         </div>
                     </div>
 
@@ -1982,13 +1993,19 @@
                         <div id="custom-agent-select-spinner" title="Načítám agenty" style="margin-left:8px;display:none;">
                             <span class="inline-spinner" aria-hidden="true"></span>
                         </div>
-                        <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-                            <label style="display:inline-flex;align-items:center;gap:6px;">
-                                <input id="custom-agent-auto-run" type="checkbox">
-                                <span style="font-size:13px;">Automaticky upravovat</span>
+                        <div style="margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <label style="display:inline-flex;align-items:center;gap:6px;">
+                                    <input id="custom-agent-auto-run" type="checkbox">
+                                    <span style="font-size:13px;">Automaticky upravovat</span>
+                                </label>
+                                <button id="custom-agent-run" type="button" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 12px;">Uprav</button>
+                                <button id="custom-agent-expand-toggle" type="button" aria-expanded="false" title="Zobrazit nastavení agenta" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;">⚙️</button>
+                            </div>
+                            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;">
+                                <input id="custom-agent-ignore-format" type="checkbox">
+                                <span>Ignorovat formát</span>
                             </label>
-                            <button id="custom-agent-run" type="button" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 12px;">Uprav</button>
-                            <button id="custom-agent-expand-toggle" type="button" aria-expanded="false" title="Zobrazit nastavení agenta" style="height:36px;display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;">⚙️</button>
                         </div>
                     </div>
 
@@ -2077,6 +2094,7 @@
         const inflightProcessRequests = new Map();
         const previewCache = new Map();
         const inflightPreviewRequests = new Map();
+        let activeApiBaseKey = "";
         let cacheWindowUuids = new Set();
         let currentAltoXml = "";
         let bookPages = [];
@@ -2183,6 +2201,7 @@
                 selectId: config.selectId,
                 selectSpinnerId: config.selectSpinnerId,
                 autoCheckboxId: config.autoCheckboxId,
+                ignoreFormatCheckboxId: config.ignoreFormatCheckboxId || null,
                 runButtonId: config.runButtonId,
                 runButtonExtraIds: config.runButtonExtraIds || [],
                 expandToggleId: config.expandToggleId,
@@ -2203,6 +2222,8 @@
                 diffControlsId: config.diffControlsId,
                 diffToggleSelector: config.diffToggleSelector,
                 autoStorageKey: config.autoStorageKey,
+                ignoreFormatStorageKey: config.ignoreFormatStorageKey || null,
+                ignoreFormatDefault: Boolean(config.ignoreFormatDefault),
                 selectedStorageKey: config.selectedStorageKey,
                 hasOutputPanel: Boolean(config.hasOutputPanel),
                 supportsDiff: Boolean(config.supportsDiff),
@@ -2228,6 +2249,7 @@
                 selectId: 'agent-select',
                 selectSpinnerId: 'agent-select-spinner',
                 autoCheckboxId: 'agent-auto-correct',
+                ignoreFormatCheckboxId: 'agent-ignore-format',
                 runButtonId: 'agent-run',
                 runButtonExtraIds: ['agent-run-inline'],
                 expandToggleId: 'agent-expand-toggle',
@@ -2249,6 +2271,8 @@
                 diffControlsId: 'agent-diff-mode-controls',
                 diffToggleSelector: '.agent-diff-toggle',
                 autoStorageKey: 'altoAgentAutoCorrect_v1',
+                ignoreFormatStorageKey: 'altoAgentIgnoreFormat_v2',
+                ignoreFormatDefault: false,
                 selectedStorageKey: 'altoAgentSelected_v1',
                 defaultAgentName: 'cleanup-diff-generated-mid',
                 hasOutputPanel: true,
@@ -2261,6 +2285,7 @@
                 selectId: 'custom-agent-select',
                 selectSpinnerId: 'custom-agent-select-spinner',
                 autoCheckboxId: 'custom-agent-auto-run',
+                ignoreFormatCheckboxId: 'custom-agent-ignore-format',
                 runButtonId: 'custom-agent-run',
                 expandToggleId: 'custom-agent-expand-toggle',
                 settingsId: 'custom-agent-settings',
@@ -2279,6 +2304,8 @@
                 resultOriginalId: 'custom-agent-result-original',
                 resultCorrectedId: 'custom-agent-result-output',
                 autoStorageKey: 'customLmmAuto_v1',
+                ignoreFormatStorageKey: 'customLmmIgnoreFormat_v2',
+                ignoreFormatDefault: true,
                 selectedStorageKey: 'customLmmSelected_v1',
                 defaultAgentName: 'custom-summary-blocks',
                 hasOutputPanel: true,
@@ -2379,6 +2406,26 @@
             const key = ctx.autoStorageKey;
             if (!key) return false;
             try { return localStorage.getItem(key) === '1'; } catch (e) { return false; }
+        }
+
+        function persistContextIgnoreFormat(ctx, value) {
+            const key = ctx.ignoreFormatStorageKey;
+            if (!key) return;
+            try { localStorage.setItem(key, value ? '1' : '0'); } catch (e) {}
+        }
+
+        function loadContextIgnoreFormat(ctx) {
+            const key = ctx.ignoreFormatStorageKey;
+            if (!key) return Boolean(ctx && ctx.ignoreFormatDefault);
+            try {
+                const stored = localStorage.getItem(key);
+                if (stored === null || stored === undefined) {
+                    return Boolean(ctx && ctx.ignoreFormatDefault);
+                }
+                return stored === '1';
+            } catch (e) {
+                return Boolean(ctx && ctx.ignoreFormatDefault);
+            }
         }
 
         function buildAgentRequestUrl(path, ctx, extraParams = {}) {
@@ -2830,12 +2877,13 @@
             const prevUuid = navigationState && navigationState.prevUuid ? navigationState.prevUuid : null;
             const nextUuid = navigationState && navigationState.nextUuid ? navigationState.nextUuid : null;
 
+            const apiBaseForStitch = activeApiBaseKey || getSelectedApiBase();
             const [prevData, nextData] = await Promise.all([
-                prevUuid ? ensureProcessData(prevUuid).catch((error) => {
+                prevUuid ? ensureProcessData(prevUuid, apiBaseForStitch).catch((error) => {
                     console.warn('Nepodařilo se načíst předchozí stranu pro napojení:', error);
                     return null;
                 }) : Promise.resolve(null),
-                nextUuid ? ensureProcessData(nextUuid).catch((error) => {
+                nextUuid ? ensureProcessData(nextUuid, apiBaseForStitch).catch((error) => {
                     console.warn('Nepodařilo se načíst následující stranu pro napojení:', error);
                     return null;
                 }) : Promise.resolve(null),
@@ -2947,7 +2995,7 @@
                 }
                 let src = page.thumbnail || '';
                 try {
-                    const entry = await ensurePreviewEntry(page.uuid);
+                    const entry = await ensurePreviewEntry(page.uuid, activeApiBaseKey || getSelectedApiBase());
                     if (entry && entry.objectUrl) {
                         src = entry.objectUrl;
                     }
@@ -4631,6 +4679,8 @@
             const name = select.value;
             const auto = getContextElement(ctx, 'autoCheckboxId');
             if (auto) auto.checked = loadContextAutoTrigger(ctx);
+            const ignoreFormat = getContextElement(ctx, 'ignoreFormatCheckboxId');
+            if (ignoreFormat) ignoreFormat.checked = loadContextIgnoreFormat(ctx);
             const fallbackModel = getDefaultModelForCollection(ctx.collection);
             let fallbackAgent = normalizeAgentData({
                 name,
@@ -5331,7 +5381,7 @@
                 return previewObjectUrl;
             }
             try {
-                const entry = await ensurePreviewEntry(currentPage.uuid);
+                const entry = await ensurePreviewEntry(currentPage.uuid, activeApiBaseKey || getSelectedApiBase());
                 if (entry && entry.objectUrl) {
                     return entry.objectUrl;
                 }
@@ -5378,10 +5428,16 @@
 
         function applyCustomAgentResult(originalHtml, agentResult, rawText) {
             const normalizedRaw = typeof rawText === 'string' ? rawText : '';
+            const inputDocument = agentResult && typeof agentResult.input_document === 'object'
+                ? agentResult.input_document
+                : null;
+            const originalText = agentResult && agentResult.format_ignored && inputDocument && typeof inputDocument.text === 'string'
+                ? inputDocument.text
+                : originalHtml;
             const resultText = agentResult && typeof agentResult.text === 'string' ? agentResult.text : '';
             const formatted = agentResult && typeof agentResult.formatted_text === 'string' ? agentResult.formatted_text : '';
             const outputText = (resultText || formatted || normalizedRaw || '').trim();
-            setCustomAgentResultPanels(originalHtml || '', outputText);
+            setCustomAgentResultPanels(originalText || '', outputText);
             return Boolean(outputText);
         }
 
@@ -6393,6 +6449,8 @@
             const autoCheckbox = getContextElement(ctx, 'autoCheckboxId');
             const willAuto = autoCheckbox && autoCheckbox.checked;
             persistContextAutoTrigger(ctx, Boolean(willAuto));
+            const ignoreFormatCheckbox = getContextElement(ctx, 'ignoreFormatCheckboxId');
+            const ignoreFormat = Boolean(ignoreFormatCheckbox && ignoreFormatCheckbox.checked);
             const originalPythonHtml = pythonHtml;
             const runBtn = getContextElement(ctx, 'runButtonId');
             const extraRunButtons = (ctx.runButtonExtraIds || [])
@@ -6436,6 +6494,9 @@
                 model: normalizedModel,
                 model_override: normalizedModel,
             };
+            if ((ctx.collection === 'custom_lmm' || ctx.collection === 'correctors') && ignoreFormat) {
+                payload.ignore_format = true;
+            }
             const resolvedLibrary = currentLibrary
                 || (currentPage && currentPage.library)
                 || (currentBook && currentBook.library)
@@ -6575,13 +6636,52 @@
                 const result = data.result || {};
                 const text = typeof result.text === 'string' ? result.text.trim() : '';
                 const statusParts = [];
+                let statusStateOverride = null;
                 console.groupCollapsed(`[AgentDebug] Response → ${name}`);
                 console.log('Výsledek:', result);
                 console.groupEnd();
 
                 if (ctx.supportsDiff) {
+                    const rawModelOutput = text || '';
+                    if (result && result.format_ignored) {
+                        const inputDocument = result && typeof result.input_document === 'object'
+                            ? result.input_document
+                            : null;
+                        const originalText = inputDocument && typeof inputDocument.text === 'string'
+                            ? inputDocument.text
+                            : originalPythonHtml;
+                        lastAgentOriginalDocumentJson = '';
+                        lastAgentCorrectedDocumentJson = '';
+                        setAgentResultPanels(originalText || '', rawModelOutput, false);
+                        if (cacheKey) {
+                            ctx.agentResultCache.set(cacheKey, {
+                                correctedContent: rawModelOutput,
+                                correctedIsHtml: false,
+                                mode: agentDiffMode,
+                                originalDocumentJson: '',
+                                correctedDocumentJson: '',
+                            });
+                        }
+                        if (rawModelOutput && originalText) {
+                            await requestAgentDiff(originalText, rawModelOutput, false, cacheBaseKey);
+                        } else {
+                            renderAgentDiff(null, agentDiffMode, { hidden: true });
+                        }
+                    } else {
                     const parsedDoc = parseAgentResultDocument(text);
+                    const outputDocument = result && typeof result.output_document === 'object' ? result.output_document : null;
                     const originalDocument = result && typeof result.input_document === 'object' ? result.input_document : null;
+                    const diffApplied = Boolean(result && result.diff_applied);
+                    const diffChanges = Array.isArray(result && result.diff_changes) ? result.diff_changes : null;
+                    const diffError = result && result.diff_error ? String(result.diff_error) : '';
+                    const noChanges = diffApplied && diffChanges && diffChanges.length === 0;
+                    let warningMessages = [];
+
+                    const hasBlocks = (doc) => doc && typeof doc === 'object' && Array.isArray(doc.blocks);
+                    const resolvedDocument = hasBlocks(outputDocument)
+                        ? outputDocument
+                        : (hasBlocks(parsedDoc) ? parsedDoc : null);
+
                     if (originalDocument) {
                         try {
                             lastAgentOriginalDocumentJson = JSON.stringify(originalDocument);
@@ -6591,22 +6691,37 @@
                     } else {
                         lastAgentOriginalDocumentJson = '';
                     }
-                    if (parsedDoc) {
+                    if (resolvedDocument) {
                         try {
-                            lastAgentCorrectedDocumentJson = JSON.stringify(parsedDoc);
+                            lastAgentCorrectedDocumentJson = JSON.stringify(resolvedDocument);
                         } catch (jsonError) {
                             lastAgentCorrectedDocumentJson = '';
                         }
                     } else {
                         lastAgentCorrectedDocumentJson = '';
                     }
-                    const htmlFromDoc = parsedDoc ? documentBlocksToHtml(parsedDoc) : null;
-                    const autoRequested = Boolean(data.auto_correct);
-                    if (autoRequested && !htmlFromDoc) {
-                        statusParts.push('Výsledek nelze aplikovat (očekáván JSON se strukturou blocks)');
+
+                    if (!resolvedDocument) {
+                        warningMessages.push('Výstup modelu není platný JSON se strukturou {changes:[…]} nebo {blocks:[…]}; zobrazuji raw odpověď modelu.');
+                        statusStateOverride = 'error';
+                    } else if (!diffApplied && !noChanges && !resolvedDocument) {
+                        warningMessages.push('Výstup modelu neobsahuje aplikovatelný diff; zobrazuji nejbližší dostupnou podobu.');
+                    } else if (noChanges) {
+                        statusParts.push('Model neprovedl žádné změny (changes je prázdné).');
+                    }
+                    if (diffError) {
+                        warningMessages.push(`Diff nelze aplikovat: ${diffError}`);
+                        statusStateOverride = 'error';
                     }
 
-                    const correctedContent = htmlFromDoc || (text || '');
+                    const htmlFromDoc = resolvedDocument ? documentBlocksToHtml(resolvedDocument) : null;
+                    const autoRequested = Boolean(data.auto_correct);
+                    if (autoRequested && !htmlFromDoc) {
+                        warningMessages.push('Výsledek nelze aplikovat (očekáván JSON se strukturou blocks). Zobrazuji raw odpověď modelu.');
+                        statusStateOverride = 'error';
+                    }
+
+                    const correctedContent = htmlFromDoc || rawModelOutput;
                     const correctedIsHtml = Boolean(htmlFromDoc);
                     setAgentResultPanels(originalPythonHtml, correctedContent, correctedIsHtml);
 
@@ -6620,36 +6735,40 @@
                         });
                     }
 
-                if (correctedContent && originalPythonHtml) {
-                    await requestAgentDiff(originalPythonHtml, correctedContent, correctedIsHtml, cacheBaseKey);
-                } else {
-                    renderAgentDiff(null, agentDiffMode, { hidden: true });
+                    if (correctedContent && originalPythonHtml) {
+                        await requestAgentDiff(originalPythonHtml, correctedContent, correctedIsHtml, cacheBaseKey);
+                    } else {
+                        renderAgentDiff(null, agentDiffMode, { hidden: true });
+                    }
+
+                    if (warningMessages.length) {
+                        statusParts.push(...warningMessages);
+                        statusStateOverride = statusStateOverride || 'error';
+                    }
+                    }
+                } else if (ctx.collection === 'joiners') {
+                    const applied = applyJoinerAgentResult(ctx, text);
+                    if (!applied) {
+                        ctx.lastJoinerResult = {
+                            result,
+                            rawText: text,
+                            timestamp: Date.now(),
+                        };
+                    }
+                } else if (ctx.collection === 'custom_lmm') {
+                    applyCustomAgentResult(originalPythonHtml, result, text);
+                } else if (ctx.collection === 'readers') {
+                    await applyReaderAgentResult(ctx, result, text);
                 }
-            } else if (ctx.collection === 'joiners') {
-                const applied = applyJoinerAgentResult(ctx, text);
-                if (!applied) {
-                    ctx.lastJoinerResult = {
-                        result,
-                        rawText: text,
-                        timestamp: Date.now(),
-                    };
-                }
-            } else if (ctx.collection === 'custom_lmm') {
-                applyCustomAgentResult(originalPythonHtml, result, text);
-            } else if (ctx.collection === 'readers') {
-                await applyReaderAgentResult(ctx, result, text);
-            }
 
                 const elapsedMs = performance.now() - startTime;
                 const elapsedLabel = `${(elapsedMs / 1000).toFixed(2)} s`;
 
                 if (statusParts.length) {
                     const statusText = statusParts.join(' · ');
-                    if (statusText.toLowerCase().includes('nelze')) {
-                        safeSetAgentOutput(ctx, statusText, `Hotovo za ${elapsedLabel}`, 'error');
-                    } else {
-                        safeSetAgentOutput(ctx, `Hotovo za ${elapsedLabel}`, statusText, 'success');
-                    }
+                    const hasError = statusText.toLowerCase().includes('nelze') || statusParts.some((part) => part.toLowerCase().includes('chyb'));
+                    const finalState = statusStateOverride || (hasError ? 'error' : 'success');
+                    safeSetAgentOutput(ctx, statusText, `Hotovo za ${elapsedLabel}`, finalState);
                 } else if (ctx.hasOutputPanel) {
                     safeSetAgentOutput(ctx, `Hotovo za ${elapsedLabel}`, '', 'success');
                 }
@@ -6820,6 +6939,13 @@
                     } else {
                         ctx.autoRunScheduled = false;
                     }
+                });
+            }
+            const ignoreFormat = getContextElement(ctx, 'ignoreFormatCheckboxId');
+            if (ignoreFormat) {
+                ignoreFormat.checked = loadContextIgnoreFormat(ctx);
+                ignoreFormat.addEventListener('change', () => {
+                    persistContextIgnoreFormat(ctx, ignoreFormat.checked);
                 });
             }
             if (toggle && settings) {
@@ -7037,10 +7163,11 @@
             });
         }
 
-        async function ensureProcessData(uuid) {
+        async function ensureProcessData(uuid, apiBaseOverride) {
             if (!uuid) {
                 return null;
             }
+            const normalizedApiBase = ensureCachesForSelectedApiBase(apiBaseOverride);
             const cached = pageCache.get(uuid);
             if (cached) {
                 cached.timestamp = Date.now();
@@ -7055,8 +7182,11 @@
                 // queries the same Kramerius instance the UI is showing. This prevents
                 // thumbnail clicks from switching the source library unexpectedly.
                 let processUrl = `/process?uuid=${encodeURIComponent(uuid)}`;
+                const preferredApiBase = (normalizedApiBase || getSelectedApiBase()).trim();
                 try {
-                    if (currentLibrary && currentLibrary.api_base) {
+                    if (preferredApiBase) {
+                        processUrl += `&api_base=${encodeURIComponent(preferredApiBase)}`;
+                    } else if (currentLibrary && currentLibrary.api_base) {
                         processUrl += `&api_base=${encodeURIComponent(currentLibrary.api_base)}`;
                     }
                 } catch (err) {
@@ -7104,7 +7234,7 @@
             return payload;
         }
 
-        async function ensurePreviewEntry(uuid) {
+        async function ensurePreviewEntry(uuid, apiBaseOverride) {
             if (!uuid) {
                 return null;
             }
@@ -7118,7 +7248,7 @@
             }
 
             const promise = (async () => {
-                const result = await fetchPreviewImage(uuid);
+                const result = await fetchPreviewImage(uuid, apiBaseOverride);
                 return storePreviewEntry(uuid, result);
             })().finally(() => {
                 inflightPreviewRequests.delete(uuid);
@@ -7177,7 +7307,7 @@
                 return;
             }
             try {
-                await ensureProcessData(uuid);
+                await ensureProcessData(uuid, activeApiBaseKey || getSelectedApiBase());
             } catch (error) {
                 console.warn("Nepodařilo se přednačíst stránku", uuid, error);
             }
@@ -7188,7 +7318,7 @@
                 return;
             }
             try {
-                await ensurePreviewEntry(uuid);
+                await ensurePreviewEntry(uuid, activeApiBaseKey || getSelectedApiBase());
             } catch (error) {
                 console.warn("Nepodařilo se přednačíst náhled", uuid, error);
             }
@@ -9086,13 +9216,18 @@
             thumb.style.display = "block";
         }
 
-        async function fetchPreviewImage(uuid) {
+        async function fetchPreviewImage(uuid, apiBaseOverride) {
             const streamOrder = ["AUTO", "IMG_PREVIEW", "IMG_THUMB", "IMG_FULL"];
             let lastError = null;
+            const normalizedApiBase = ensureCachesForSelectedApiBase(apiBaseOverride);
 
             for (const requestedStream of streamOrder) {
                 try {
-                    const response = await fetch(`/preview?uuid=${encodeURIComponent(uuid)}&stream=${requestedStream}`, { cache: "no-store" });
+                    let previewUrl = `/preview?uuid=${encodeURIComponent(uuid)}&stream=${requestedStream}`;
+                    if (normalizedApiBase) {
+                        previewUrl += `&api_base=${encodeURIComponent(normalizedApiBase)}`;
+                    }
+                    const response = await fetch(previewUrl, { cache: "no-store" });
                     if (!response.ok) {
                         lastError = new Error(`HTTP ${response.status} (${requestedStream})`);
                         continue;
@@ -9249,7 +9384,7 @@
             let handleLoad;
 
             try {
-                const entry = await ensurePreviewEntry(uuid);
+                const entry = await ensurePreviewEntry(uuid, activeApiBaseKey || getSelectedApiBase());
 
                 if (!entry || previewImageUuid !== uuid) {
                     container.style.height = "";
@@ -9402,7 +9537,8 @@
 
             if (libraryEl) {
                 if (currentLibrary && currentLibrary.label) {
-                    libraryEl.textContent = currentLibrary.label;
+                    const version = currentLibrary.version ? ` (${currentLibrary.version})` : "";
+                    libraryEl.textContent = `${currentLibrary.label}${version}`;
                     libraryEl.style.display = "block";
                 } else {
                     libraryEl.textContent = "";
@@ -9697,6 +9833,26 @@
             if (uuidField && typeof uuidField.blur === "function") {
                 uuidField.blur();
             }
+        }
+
+        function getSelectedApiBase() {
+            const input = document.getElementById("api-base");
+            return input ? (input.value || "").trim() : "";
+        }
+
+        function ensureCachesForSelectedApiBase(forcedValue) {
+            const selected = typeof forcedValue === "string" ? forcedValue.trim() : getSelectedApiBase();
+            if (selected === activeApiBaseKey) {
+                return selected;
+            }
+            // New target library – reset cached payloads to avoid mixing sources.
+            pageCache.clear();
+            previewCache.clear();
+            inflightProcessRequests.clear();
+            inflightPreviewRequests.clear();
+            cacheWindowUuids = new Set();
+            activeApiBaseKey = selected;
+            return selected;
         }
 
         function isModalActive() {
@@ -10109,6 +10265,7 @@
         async function processAlto() {
             const uuidField = document.getElementById("uuid");
             const uuid = uuidField ? uuidField.value.trim() : "";
+            const selectedApiBase = ensureCachesForSelectedApiBase();
 
             if (!uuid) {
                 alert("Zadejte UUID");
@@ -10128,7 +10285,7 @@
             }
 
             try {
-                const data = await ensureProcessData(uuid);
+                const data = await ensureProcessData(uuid, selectedApiBase);
 
                 if (token !== processRequestToken) {
                     return;
