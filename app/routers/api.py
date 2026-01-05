@@ -56,7 +56,7 @@ class ExportRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     uuid: str = Field(..., description="UUID knihy nebo stránky")
-    export_format: Optional[str] = Field("txt", alias="format", description="html|txt|md")
+    export_format: Optional[str] = Field("txt", alias="format", description="html|txt|md|epub")
     range_value: Optional[str] = Field(None, alias="range")
     llm_agent: dict[str, Any] = Field(default_factory=dict, alias="llmAgent")
     drop_small: bool = Field(False, alias="dropSmall")
@@ -69,7 +69,7 @@ def _build_export_params(request: ExportRequest) -> ExportJobParams:
     allowed_sources = {"algorithmic", "llm", "ocr"}
     if request.source not in allowed_sources:
         raise HTTPException(status_code=400, detail="Nepodporovaný typ exportu.")
-    allowed_formats = {"html", "txt", "md"}
+    allowed_formats = {"html", "txt", "md", "epub"}
     if request.export_format not in allowed_formats:
         raise HTTPException(status_code=400, detail="Nepodporovaný formát exportu.")
     allowed_modes = {"all", "current", "custom"}
@@ -101,7 +101,7 @@ def _build_export_params(request: ExportRequest) -> ExportJobParams:
 @router.post("/download")
 def start_download(payload: DownloadRequest) -> JSONResponse:
     fmt = (payload.export_format or "txt").lower()
-    if fmt not in {"html", "txt", "md"}:
+    if fmt not in {"html", "txt", "md", "epub"}:
         raise HTTPException(status_code=400, detail="Nepodporovaný formát exportu.")
 
     processor = AltoProcessor(api_base_url=payload.api_base)

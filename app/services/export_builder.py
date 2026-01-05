@@ -6,11 +6,13 @@ import json
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from html import escape
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from bs4 import BeautifulSoup, Tag
+from ebooklib import epub
 
 from ..core.agent_runner import AgentRunnerError, run_agent as run_agent_via_responses
 from ..core.export_jobs import AbortRequested, ExportJob, ExportJobParams
@@ -106,6 +108,11 @@ class ExportBuilder:
 
         self._apply_joiner(page_contents)
         combined_html = self._compose_document(page_contents)
+        if self.params.export_format == "epub":
+            path = self._build_epub(combined_html)
+            filename = self._build_filename()
+            return path, filename
+
         output_text = self._convert_format(combined_html)
         suffix = f".{self.params.export_format}"
         fd, path = tempfile.mkstemp(prefix="alto_export_", suffix=suffix)
@@ -483,6 +490,8 @@ class ExportBuilder:
         format_kind = self.params.export_format
         if format_kind == "html":
             return html_document
+        if format_kind == "epub":
+            raise RuntimeError("EPUB by měl být zpracován přes _build_epub.")
         soup = BeautifulSoup(html_document, "html.parser")
         blocks = []
         for element in soup.find_all(["h1", "h2", "h3", "p", "blockquote", "small", "div", "note"]):
@@ -508,6 +517,67 @@ class ExportBuilder:
         if tag == "blockquote":
             return "> " + text
         return text
+
+    def _build_epub(self, html_document: str) -> str:
+        soup = BeautifulSoup(html_document or "", "html.parser")
+        body = soup.body or soup
+        chapters: List[tuple[str, List[str]]] = []
+        current_title: Optional[str] = None
+        current_parts: List[str] = []
+
+        def flush():
+            if not current_parts:
+                return
+            title = current_title or f"Kapitola {len(chapters) + 1}"
+            chapters.append((title, list(current_parts)))
+
+        allowed_tags = {"h1", "h2", "h3", "p", "blockquote", "small", "div", "note"}
+        for element in body.find_all(allowed_tags, recursive=True):
+            tag_name = (element.name or "").lower()
+            html_chunk = element.decode()
+            if tag_name in {"h1", "h2", "h3"}:
+                flush()
+                current_title = element.get_text(" ", strip=True) or f"Kapitola {len(chapters) + 1}"
+                current_parts = [html_chunk]
+            else:
+                current_parts.append(html_chunk)
+        flush()
+
+        if not chapters:
+            content = body.decode() if body else ""
+            chapters = [("Kapitola 1", [content])]
+
+        book = epub.EpubBook()
+        book.set_title(self.params.book_title or "Export")
+        book.set_language((self.params.language_hint or "cs")[:5])
+        identifier = self.params.book_uuid or self.params.current_page_uuid or uuid.uuid4().hex
+        book.set_identifier(identifier)
+
+        epub_chapters = []
+        for idx, (title, parts) in enumerate(chapters, start=1):
+            chapter = epub.EpubHtml(
+                title=title or f"Kapitola {idx}",
+                file_name=f"chap_{idx}.xhtml",
+                lang=(self.params.language_hint or "cs")[:5],
+            )
+            content = "\n".join(parts)
+            chapter.set_content(f"<html><head><meta charset='utf-8'></head><body>{content}</body></html>")
+            book.add_item(chapter)
+            epub_chapters.append(chapter)
+
+        if epub_chapters:
+            book.toc = epub_chapters
+            book.spine = ["nav"] + epub_chapters
+        else:
+            book.spine = ["nav"]
+
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+
+        fd, path = tempfile.mkstemp(prefix="alto_export_", suffix=".epub")
+        os.close(fd)
+        epub.write_epub(path, book)
+        return path
 
     def _parse_agent_document(self, text: str) -> Optional[Dict[str, Any]]:
         trimmed = text.strip()
