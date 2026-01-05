@@ -98,11 +98,34 @@ IIIF_LIBRARY_CODES: Dict[str, str] = {
 
 # Verbose ALTO debug logging; set to True locally if needed.
 LOG_DEBUG_ALTO = False
+PERF_DEBUG_TAG = "[PerfDebug]"
+CACHE_DEBUG_TAG = "[CacheDebug]"
 
 
 def _debug(msg: str) -> None:
     if LOG_DEBUG_ALTO:
         print(f"[DEBUG]: {msg}")
+
+
+def _perf_debug(label: str, data: Any = None) -> None:
+    """Temporary perf logging helper (easy to strip by PERF_DEBUG_TAG)."""
+    try:
+        payload = f"{PERF_DEBUG_TAG} {label}"
+        if data is not None:
+            payload = f"{payload} | {data}"
+        print(payload)
+    except Exception:
+        pass
+
+
+def _cache_debug(label: str, data: Any = None) -> None:
+    try:
+        payload = f"{CACHE_DEBUG_TAG} {label}"
+        if data is not None:
+            payload = f"{payload} | {data}"
+        print(payload)
+    except Exception:
+        pass
 
 # Shared executor for parallel fetches (bounded size)
 _EXECUTOR = ThreadPoolExecutor(max_workers=6)
@@ -173,7 +196,10 @@ class AltoProcessor:
         return normalized or None
 
     def _get_cached_item(self, pid: str) -> Optional[Dict[str, Any]]:
-        return self._item_cache.get(pid)
+        item = self._item_cache.get(pid)
+        if item:
+            _cache_debug("item_hit", pid)
+        return item
 
     def _cache_item(self, pid: str, data: Dict[str, Any]) -> None:
         if pid:
@@ -181,20 +207,30 @@ class AltoProcessor:
                 self._item_cache[pid].update(data)
             else:
                 self._item_cache[pid] = data
+            _cache_debug("item_store", pid)
 
     def _get_cached_pages(self, book_uuid: str) -> Optional[List[Dict[str, Any]]]:
-        return self._pages_cache.get(book_uuid or "")
+        key = book_uuid or ""
+        pages = self._pages_cache.get(key)
+        if pages is not None:
+            _cache_debug("pages_hit", key)
+        return pages
 
     def _cache_pages(self, book_uuid: str, pages: List[Dict[str, Any]]) -> None:
         if book_uuid and isinstance(pages, list):
             self._pages_cache[book_uuid] = pages
+            _cache_debug("pages_store", book_uuid)
 
     def _get_cached_mods(self, pid: str) -> Optional[List[Dict[str, str]]]:
-        return self._mods_cache.get(pid)
+        mods = self._mods_cache.get(pid)
+        if mods is not None:
+            _cache_debug("mods_hit", pid)
+        return mods
 
     def _cache_mods(self, pid: str, metadata: List[Dict[str, str]]) -> None:
         if pid and isinstance(metadata, list):
             self._mods_cache[pid] = metadata
+            _cache_debug("mods_store", pid)
 
     @staticmethod
     def _has_core_item_fields(data: Dict[str, Any]) -> bool:
@@ -331,6 +367,11 @@ class AltoProcessor:
             return None
         return None
 
+    def _build_preview_url(self, uuid: str, stream: str = "IMG_THUMB", api_base: Optional[str] = None) -> str:
+        base = api_base or self.api_base_url or ""
+        api_part = f"&api_base={requests.utils.quote(base)}" if base else ""
+        return f"/preview?uuid={requests.utils.quote(uuid)}&stream={stream}{api_part}"
+
     def _pages_from_manifest(self, book_uuid: str, library_code: str) -> List[Dict[str, Any]]:
         manifest_url = f"https://iiif.digitalniknihovna.cz/{library_code}/uuid:{book_uuid}"
         try:
@@ -387,7 +428,7 @@ class AltoProcessor:
                 "policy": None,
             }
             if thumb_url:
-                summary["thumbnail"] = thumb_url
+                summary["thumbnail"] = self._build_preview_url(page_uuid_norm, "IMG_THUMB")
             pages.append(summary)
         return pages
 
@@ -400,6 +441,12 @@ class AltoProcessor:
 
     def get_request_stats(self) -> Dict[str, int]:
         return dict(self._request_stats)
+
+    def log_request_stats(self, label: str = "") -> None:
+        """Temporary perf logger with PERF_DEBUG_TAG prefix."""
+        stats = self.get_request_stats()
+        suffix = f" ({label})" if label else ""
+        _perf_debug(f"request_stats{suffix}", stats)
 
     def _normalize_api_bases(self, bases: List[str]) -> List[str]:
         ordered: List[str] = []
@@ -1723,6 +1770,7 @@ class AltoProcessor:
         if version == "k7" and library_code:
             manifest_pages = self._pages_from_manifest(book_uuid, library_code)
             if manifest_pages:
+                self._cache_pages(book_uuid, manifest_pages)
                 return manifest_pages
             self._stat_increment("fallback_manifest_to_api")
 
@@ -1963,6 +2011,11 @@ class AltoProcessor:
         if not raw_uuid:
             return ""
 
+        cached = getattr(self, "_alto_cache", None)
+        if isinstance(cached, dict) and raw_uuid in cached:
+            _cache_debug("alto_hit", raw_uuid)
+            return cached[raw_uuid]
+
         attempted: List[str] = []
         last_error: Optional[Exception] = None
         for base in self._iter_api_bases(api_base_override):
@@ -1982,7 +2035,12 @@ class AltoProcessor:
                 response = self.session.get(url, timeout=ALTO_TIMEOUT)
                 response.raise_for_status()
                 self._remember_successful_base(base)
-                return response.content.decode('utf-8', errors='replace')
+                content = response.content.decode('utf-8', errors='replace')
+                if not isinstance(getattr(self, "_alto_cache", None), dict):
+                    self._alto_cache = {}
+                self._alto_cache[raw_uuid] = content
+                _cache_debug("alto_store", raw_uuid)
+                return content
             except Exception as exc:
                 last_error = exc
                 continue
