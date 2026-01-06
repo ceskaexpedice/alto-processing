@@ -38,6 +38,7 @@ BLOCK_TAGS = {
 }
 HYPHENLIKE = "-–—‑‒−‐"
 SENTENCE_END_RE = re.compile(r"[.!?…»\]\)]\s*$")
+SENTENCE_START_RE = re.compile(r"^[\s\"'„“”«»‚‘’‹›(\[{\-—–]*[A-ZÀ-Ž]")
 LEADING_PUNCT_RE = re.compile(r"^[,.;:!?)]")
 
 
@@ -71,6 +72,15 @@ class PageContent:
 
     def last_snippet(self) -> Optional[Snippet]:
         return self.snippets[-1] if self.snippets else None
+
+    def first_non_note_snippet(self) -> Optional[Snippet]:
+        return next((snippet for snippet in self.snippets if snippet and snippet.tag != "note"), None)
+
+    def last_non_note_snippet(self) -> Optional[Snippet]:
+        for snippet in reversed(self.snippets):
+            if snippet and snippet.tag != "note":
+                return snippet
+        return None
 
     def render_html(self) -> str:
         if not self.blocks:
@@ -280,8 +290,8 @@ class ExportBuilder:
             nxt = pages[idx + 1]
             if nxt.plan.index - current.plan.index != 1:
                 continue
-            left_snippet = current.last_snippet()
-            right_snippet = nxt.first_snippet()
+            left_snippet = current.last_non_note_snippet()
+            right_snippet = nxt.first_non_note_snippet()
             if not left_snippet or not right_snippet:
                 continue
             if manual_mode or not agent_config:
@@ -298,11 +308,15 @@ class ExportBuilder:
                 self._merge_page_pair(current, nxt, left_snippet, right_snippet)
 
     def _manual_join_decision(self, first: Snippet, second: Snippet) -> str:
+        tag_a = (first.tag or "").strip().lower()
+        tag_b = (second.tag or "").strip().lower()
+        if tag_a and tag_b and tag_a != tag_b:
+            return "split"
         text_a = first.text.strip()
         text_b = second.text.strip()
         if not text_a or not text_b:
             return "split"
-        if SENTENCE_END_RE.search(text_a):
+        if SENTENCE_END_RE.search(text_a) and SENTENCE_START_RE.search(text_b):
             return "split"
         if text_a and text_a[-1] in HYPHENLIKE:
             return "merge"

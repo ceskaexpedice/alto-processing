@@ -2500,32 +2500,24 @@
                 return [];
             }
             const snippets = [];
-            const pushElements = (selector) => {
-                doc.body.querySelectorAll(selector).forEach((el) => {
-                    if (!(el instanceof HTMLElement)) {
-                        return;
-                    }
-                    if (el.closest('note')) {
-                        return;
-                    }
-                    const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-                    if (!text) {
-                        return;
-                    }
-                    snippets.push({
-                        text,
-                        html: el.outerHTML || escapeHtml(text),
-                        tag: (el.tagName || '').toLowerCase(),
-                    });
+            const selector = 'p, div, blockquote, li, h1, h2, h3, h4, h5, h6, small';
+            doc.body.querySelectorAll(selector).forEach((el) => {
+                if (!(el instanceof HTMLElement)) {
+                    return;
+                }
+                if (el.closest('note')) {
+                    return;
+                }
+                const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                if (!text) {
+                    return;
+                }
+                snippets.push({
+                    text,
+                    html: el.outerHTML || escapeHtml(text),
+                    tag: (el.tagName || '').toLowerCase(),
                 });
-            };
-            pushElements('p');
-            if (!snippets.length) {
-                pushElements('div');
-                pushElements('blockquote');
-                pushElements('li');
-                pushElements('h1, h2, h3, h4, h5, h6');
-            }
+            });
             return snippets;
         }
 
