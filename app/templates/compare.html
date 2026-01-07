@@ -7844,6 +7844,41 @@
             return payload;
         }
 
+        function extractAuthorsFromMods(mods) {
+            const authors = [];
+            if (!Array.isArray(mods)) {
+                return authors;
+            }
+            mods.forEach((entry) => {
+                const label = (entry && entry.label ? String(entry.label) : '').trim().toLowerCase();
+                if (!['autoři', 'autori', 'authors'].includes(label)) {
+                    return;
+                }
+                const value = entry && entry.value ? String(entry.value) : '';
+                value.split(';').forEach((part) => {
+                    const trimmed = part.trim();
+                    if (trimmed && !authors.includes(trimmed)) {
+                        authors.push(trimmed);
+                    }
+                });
+            });
+            return authors;
+        }
+
+        function pickCoverUuidFromPages(pages) {
+            if (!Array.isArray(pages) || !pages.length) {
+                return null;
+            }
+            const priority = ['frontcover', 'titlepage', 'frontjacket', 'cover', 'frontendsheet'];
+            for (const page of pages) {
+                const pageType = (page && page.pageType ? String(page.pageType) : '').trim().toLowerCase();
+                if (priority.includes(pageType) && page && page.uuid) {
+                    return page.uuid;
+                }
+            }
+            return pages[0] && pages[0].uuid ? pages[0].uuid : null;
+        }
+
         function buildExportPagesPayload() {
             if (!Array.isArray(bookPages)) {
                 return [];
@@ -7881,6 +7916,8 @@
                 rangeValue,
                 bookUuid: currentBook.uuid,
                 bookTitle: currentBook.title || '',
+                authors: extractAuthorsFromMods(currentBook.mods),
+                coverUuid: pickCoverUuidFromPages(bookPages),
                 currentPageUuid: currentPage && currentPage.uuid ? currentPage.uuid : '',
                 apiBase,
                 pages: buildExportPagesPayload(),

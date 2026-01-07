@@ -94,6 +94,7 @@ class ExportBuilder:
         self.params: ExportJobParams = job.params
         self.processor = AltoProcessor(api_base_url=self.params.api_base)
         self._debug_enabled = True
+        self._epub_log_tag = "[EPUB_META]"
 
     def build(self) -> tuple[str, str]:
         pages = self._select_pages()
@@ -532,6 +533,81 @@ class ExportBuilder:
             return "> " + text
         return text
 
+    def _epub_log(self, message: str) -> None:
+        self._log_debug(f"{self._epub_log_tag} {message}")
+
+    def _resolve_cover_uuid(self) -> Optional[str]:
+        if self.params.cover_uuid:
+            return self.params.cover_uuid
+        priority = ["frontcover", "titlepage", "frontjacket", "cover", "frontendsheet"]
+        for page in self.params.pages or []:
+            page_type = (page.get("pageType") or "").strip().lower()
+            if page_type in priority and page.get("uuid"):
+                self._epub_log(f"Cover candidate selected by pageType '{page_type}': {page.get('uuid')}")
+                return str(page.get("uuid"))
+        if self.params.pages:
+            first_uuid = self.params.pages[0].get("uuid")
+            if first_uuid:
+                self._epub_log(f"Cover fallback to first page: {first_uuid}")
+                return str(first_uuid)
+        return None
+
+    def _fetch_cover_bytes(self, cover_uuid: str) -> Optional[bytes]:
+        streams = ["IMG_FULL", "IMG_PREVIEW", "IMG_THUMB"]
+        for base in self.processor._iter_api_bases(self.params.api_base):
+            version = AltoProcessor._detect_api_version(base)
+            pid = AltoProcessor._format_pid_for_version(cover_uuid, version)
+            for stream in streams:
+                self._check_abort()
+                if not pid:
+                    continue
+                if version == "k7":
+                    path = "image"
+                    if stream == "IMG_THUMB":
+                        path = "image/thumb"
+                    elif stream == "IMG_PREVIEW":
+                        path = "image/preview"
+                    url = f"{base}/items/{pid}/{path}"
+                else:
+                    url = f"{base}/item/uuid:{pid}/streams/{stream}"
+                try:
+                    self._epub_log(f"Fetching cover stream {stream} from {base}")
+                    response = self.processor.session.get(url, timeout=20)
+                except Exception as exc:  # pragma: no cover - network defensive
+                    self._epub_log(f"Cover fetch failed for {cover_uuid} stream {stream} base {base}: {exc}")
+                    continue
+
+                if response.status_code != 200 or not response.content:
+                    response.close()
+                    continue
+                content_type = response.headers.get("Content-Type", "").lower()
+                if "jp2" in content_type:
+                    response.close()
+                    continue
+                data = response.content
+                response.close()
+                if data:
+                    self._epub_log(
+                        f"Cover stream {stream} from {base} OK "
+                        f"(bytes={len(data)}, content_type={content_type or 'unknown'})"
+                    )
+                    return data
+        return None
+
+    def _attach_cover(self, book: epub.EpubBook) -> None:
+        cover_uuid = self._resolve_cover_uuid()
+        if not cover_uuid:
+            return
+        self._epub_log(f"Downloading cover for uuid={cover_uuid}")
+        cover_bytes = self._fetch_cover_bytes(cover_uuid)
+        if not cover_bytes:
+            self._epub_log(f"Nepodařilo se stáhnout obálku pro {cover_uuid}")
+            return
+        try:
+            book.set_cover("cover.jpg", cover_bytes)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._epub_log(f"Přidání obálky do EPUB selhalo: {exc}")
+
     def _build_epub(self, html_document: str) -> str:
         soup = BeautifulSoup(html_document or "", "html.parser")
         body = soup.body or soup
@@ -566,6 +642,13 @@ class ExportBuilder:
         book.set_language((self.params.language_hint or "cs")[:5])
         identifier = self.params.book_uuid or self.params.current_page_uuid or uuid.uuid4().hex
         book.set_identifier(identifier)
+        if self.params.authors:
+            self._epub_log(f"EPUB authors: {', '.join(self.params.authors)}")
+        for author in self.params.authors or []:
+            book.add_author(author)
+            book.add_metadata("DC", "creator", author)
+
+        self._attach_cover(book)
 
         epub_chapters = []
         for idx, (title, parts) in enumerate(chapters, start=1):

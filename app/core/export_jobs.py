@@ -29,6 +29,8 @@ class ExportJobParams:
     current_page_uuid: str
     pages: List[Dict[str, Any]]
     api_base: Optional[str]
+    authors: List[str] = field(default_factory=list)
+    cover_uuid: Optional[str] = None
     joiner: Dict[str, Any] = field(default_factory=dict)
     llm_agent: Dict[str, Any] = field(default_factory=dict)
     ocr_agent: Dict[str, Any] = field(default_factory=dict)

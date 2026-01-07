@@ -35,11 +35,32 @@ def _json_error(message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
+def _extract_authors(mods: list[dict[str, Any]]) -> list[str]:
+    authors: list[str] = []
+    for entry in mods or []:
+        label = (entry.get("label") or "").strip().lower()
+        if label not in {"autoři", "autori", "authors"}:
+            continue
+        value = (entry.get("value") or "").strip()
+        if value:
+            authors.extend([part.strip() for part in value.split(";") if part.strip()])
+    seen = set()
+    deduped: list[str] = []
+    for author in authors:
+        if author in seen:
+            continue
+        seen.add(author)
+        deduped.append(author)
+    return deduped
+
+
 class ExportRequest(BaseModel):
     source: str = Field(..., description="algorithmic|llm|ocr")
     export_format: str = Field(..., alias="format", description="html|txt|md")
     range_mode: str = Field(..., alias="rangeMode")
     range_value: Optional[str] = Field(None, alias="rangeValue")
+    authors: list[str] = Field(default_factory=list)
+    cover_uuid: Optional[str] = Field(None, alias="coverUuid")
     book_uuid: str = Field(..., alias="bookUuid")
     book_title: Optional[str] = Field(None, alias="bookTitle")
     current_page_uuid: str = Field(..., alias="currentPageUuid")
@@ -58,11 +79,22 @@ class DownloadRequest(BaseModel):
     uuid: str = Field(..., description="UUID knihy nebo stránky")
     export_format: Optional[str] = Field("txt", alias="format", description="html|txt|md|epub")
     range_value: Optional[str] = Field(None, alias="range")
+    authors: list[str] = Field(default_factory=list)
+    cover_uuid: Optional[str] = Field(None, alias="coverUuid")
     llm_agent: dict[str, Any] = Field(default_factory=dict, alias="llmAgent")
     drop_small: bool = Field(False, alias="dropSmall")
     output_filename: Optional[str] = Field(None, alias="outputName")
     api_base: Optional[str] = Field(None, alias="apiBase")
     language_hint: str = Field("cs", alias="languageHint")
+
+
+def _select_cover_uuid(pages: list[dict[str, Any]]) -> Optional[str]:
+    priority = ["frontcover", "titlepage", "frontjacket", "cover", "frontendsheet"]
+    for page in pages or []:
+        page_type = (page.get("pageType") or "").strip().lower()
+        if page_type in priority:
+            return page.get("uuid")
+    return pages[0].get("uuid") if pages else None
 
 
 def _build_export_params(request: ExportRequest) -> ExportJobParams:
@@ -78,6 +110,8 @@ def _build_export_params(request: ExportRequest) -> ExportJobParams:
     if not request.pages:
         raise HTTPException(status_code=400, detail="Export neobsahuje žádné stránky.")
     params = ExportJobParams(
+        authors=list(request.authors or []),
+        cover_uuid=request.cover_uuid or _select_cover_uuid(request.pages),
         source=request.source,
         export_format=request.export_format,
         range_mode=request.range_mode,
@@ -130,7 +164,10 @@ def start_download(payload: DownloadRequest) -> JSONResponse:
         range_value = None
 
     book_data = context.get("book") or {}
+    mods_metadata = context.get("mods") or []
     params = ExportJobParams(
+        authors=payload.authors or _extract_authors(mods_metadata),
+        cover_uuid=payload.cover_uuid or _select_cover_uuid(pages),
         source="llm" if payload.llm_agent else "algorithmic",
         export_format=fmt,
         range_mode=range_mode,
