@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from .config import get_settings
 from .routers import ui, api
@@ -22,3 +23,9 @@ if static_dir.exists():
 @app.get("/healthz")
 async def health_check() -> dict[str, str]:
     return {"status": "ok", "environment": settings.environment}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    """Serve the favicon from the static directory for legacy /favicon.ico requests."""
+    return FileResponse(static_dir / "favicon.ico")
