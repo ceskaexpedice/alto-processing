@@ -157,8 +157,16 @@ class ExportBuilder:
 
     def _ensure_algorithmic_html(self, plan: PagePlan) -> str:
         if plan.cached_python:
-            self._log_debug(f"Používám cache python HTML pro {plan.uuid}")
-            return plan.cached_python
+            has_illustration = ("class=\"illustration\"" in plan.cached_python) or ("class='illustration'" in plan.cached_python)
+            if self.params.export_format == "epub" and not self.params.ignore_images:
+                if not has_illustration:
+                    self._log_debug(f"Cache python HTML pro {plan.uuid} neobsahuje ilustrace – obnovuji z ALTO")
+                else:
+                    self._log_debug(f"Používám cache python HTML pro {plan.uuid} (obsahuje ilustrace)")
+                    return plan.cached_python
+            else:
+                self._log_debug(f"Používám cache python HTML pro {plan.uuid}")
+                return plan.cached_python
         self._log_debug(f"Stahuji ALTO data pro {plan.uuid}")
         alto_xml = self.processor.get_alto_data(plan.uuid)
         if not alto_xml:
@@ -360,10 +368,25 @@ class ExportBuilder:
             previous.snippets[-1] = merged
         if previous.blocks:
             previous.blocks[-1] = merged.html
-        if current.snippets:
-            current.snippets.pop(0)
-        if current.blocks:
-            current.blocks.pop(0)
+        # Odeber právě ten blok, který byl použit pro merge (může to být až za note)
+        rm_index = None
+        for idx, snippet in enumerate(current.snippets):
+            if snippet is right:
+                rm_index = idx
+                break
+        if rm_index is None:
+            # fallback: použij první nenote index
+            for idx, snippet in enumerate(current.snippets):
+                if snippet.tag != "note":
+                    rm_index = idx
+                    break
+        if rm_index is None and current.snippets:
+            rm_index = 0
+        if rm_index is not None and rm_index < len(current.snippets):
+            current.snippets.pop(rm_index)
+            if rm_index < len(current.blocks):
+                current.blocks.pop(rm_index)
+        # Pokud nic nezůstalo, přidej prázdný blok/snippet, aby downstream kód nespadl
         if not current.blocks:
             current.blocks.append("")
         if not current.snippets:
@@ -452,6 +475,8 @@ class ExportBuilder:
         snippets: List[Snippet] = []
         omit_small = bool(self.params.omit_small_text)
         omit_note = bool(self.params.omit_note_text)
+        ignore_images = bool(getattr(self.params, "ignore_images", False))
+        export_format = (self.params.export_format or "").lower()
         if wrapper:
             for child in wrapper.children:
                 if not isinstance(child, Tag):
@@ -460,10 +485,15 @@ class ExportBuilder:
                 if tag_name not in BLOCK_TAGS:
                     continue
                 block_html = child.decode()
+                if ignore_images and self._is_illustration_note(child):
+                    continue
                 if omit_small and self._is_small_markup(block_html, tag_name):
                     continue
                 if omit_note and self._is_note_markup(block_html, tag_name):
-                    continue
+                    # Pro EPUB necháme ilustrační note projít (převádí se na obrázek),
+                    # pro ostatní formáty je odstranit.
+                    if export_format != "epub" or not self._is_illustration_note(child):
+                        continue
                 text = child.get_text(" ", strip=True)
                 if not text:
                     continue
@@ -483,7 +513,7 @@ class ExportBuilder:
 
     @staticmethod
     def _is_small_markup(markup: str, tag_name: str) -> bool:
-        if tag_name in {"small", "note"}:
+        if tag_name == "small":
             return True
         lower = markup.lower()
         if "<small" in lower:
@@ -501,6 +531,20 @@ class ExportBuilder:
             return True
         return False
 
+    @staticmethod
+    def _is_illustration_note(tag: Tag) -> bool:
+        if not tag or not isinstance(tag, Tag):
+            return False
+        if (tag.name or "").lower() != "note":
+            return False
+        cls = " ".join(tag.get("class") or [])
+        if "illustration" in cls.lower():
+            return True
+        data_kind = (tag.get("data-kind") or tag.get("data-type") or "").lower()
+        if data_kind == "illustration":
+            return True
+        return False
+
     def _convert_format(self, html_document: str) -> str:
         format_kind = self.params.export_format
         if format_kind == "html":
@@ -508,8 +552,20 @@ class ExportBuilder:
         if format_kind == "epub":
             raise RuntimeError("EPUB by měl být zpracován přes _build_epub.")
         soup = BeautifulSoup(html_document, "html.parser")
-        blocks = []
-        for element in soup.find_all(["h1", "h2", "h3", "p", "blockquote", "small", "div", "note"]):
+        body = soup.body or soup
+        blocks: List[str] = []
+        allowed = {"h1", "h2", "h3", "p", "blockquote", "small", "div", "note"}
+        for element in body.find_all(allowed):
+            # přeskočit vnořené povolené tagy (např. <small> uvnitř <p>)
+            parent = element.parent
+            skip = False
+            while parent and parent != body:
+                if parent.name and parent.name.lower() in allowed:
+                    skip = True
+                    break
+                parent = parent.parent
+            if skip:
+                continue
             text = element.get_text(" ", strip=True)
             if not text:
                 continue
@@ -608,6 +664,226 @@ class ExportBuilder:
         except Exception as exc:  # pragma: no cover - defensive
             self._epub_log(f"Přidání obálky do EPUB selhalo: {exc}")
 
+    def _fetch_image_bytes(self, image_uuid: str) -> Optional[bytes]:
+        streams = ["IMG_FULL", "IMG_PREVIEW", "IMG_THUMB"]
+        for base in self.processor._iter_api_bases(self.params.api_base):
+            version = AltoProcessor._detect_api_version(base)
+            pid = AltoProcessor._format_pid_for_version(image_uuid, version)
+            for stream in streams:
+                self._check_abort()
+                if not pid:
+                    continue
+                if version == "k7":
+                    path = "image"
+                    if stream == "IMG_THUMB":
+                        path = "image/thumb"
+                    elif stream == "IMG_PREVIEW":
+                        path = "image/preview"
+                    url = f"{base}/items/{pid}/{path}"
+                else:
+                    url = f"{base}/item/uuid:{pid}/streams/{stream}"
+                try:
+                    self._epub_log(f"Fetching illustration {image_uuid} stream {stream} from {base}")
+                    response = self.processor.session.get(url, timeout=20)
+                except Exception as exc:  # pragma: no cover - network defensive
+                    self._epub_log(f"Illustration fetch failed {image_uuid} stream {stream} base {base}: {exc}")
+                    continue
+                if response.status_code != 200 or not response.content:
+                    response.close()
+                    continue
+                content_type = response.headers.get("Content-Type", "").lower()
+                if "jp2" in content_type:
+                    response.close()
+                    continue
+                data = response.content
+                response.close()
+                if data:
+                    self._epub_log(
+                        f"Illustration stream {stream} from {base} OK "
+                        f"(bytes={len(data)}, content_type={content_type or 'unknown'})"
+                    )
+                    return data
+        return None
+
+    def _fetch_iiif_crop(
+        self,
+        page_uuid: str,
+        hpos: float,
+        vpos: float,
+        width: float,
+        height: float,
+        page_width: int,
+        page_height: int,
+    ) -> Optional[bytes]:
+        if not page_uuid or not page_width or not page_height:
+            return None
+        # Ověřit, že IIIF dává smysl (typicky k7)
+        for base in self.processor._iter_api_bases(self.params.api_base):
+            version = AltoProcessor._detect_api_version(base)
+            if version != "k7":
+                continue
+            iiif_info_url = f"{self.processor.iiif_base_url}/uuid:{page_uuid}/info.json"
+            try:
+                self._epub_log(f"IIIF info {iiif_info_url}")
+                resp = self.processor.session.get(iiif_info_url, timeout=15)
+                resp.raise_for_status()
+                info = resp.json()
+            except Exception as exc:  # pragma: no cover - network defensive
+                self._epub_log(f"IIIF info failed {page_uuid}: {exc}")
+                continue
+            img_w = float(info.get("width") or 0)
+            img_h = float(info.get("height") or 0)
+            if not img_w or not img_h:
+                continue
+            scale_x = img_w / page_width
+            scale_y = img_h / page_height
+            x = int(round(max(0.0, hpos) * scale_x))
+            y = int(round(max(0.0, vpos) * scale_y))
+            w = int(round(max(1.0, width) * scale_x))
+            h = int(round(max(1.0, height) * scale_y))
+            # clamp to image bounds
+            if x + w > img_w:
+                w = max(1, int(img_w) - x)
+            if y + h > img_h:
+                h = max(1, int(img_h) - y)
+            max_side = max(w, h)
+            size_part = "max"
+            if max_side > 1600:
+                size_part = f",{1600}"
+            region = f"{x},{y},{w},{h}"
+            iiif_image_url = f"{self.processor.iiif_base_url}/uuid:{page_uuid}/{region}/{size_part}/0/default.jpg"
+            try:
+                self._epub_log(f"IIIF crop {iiif_image_url}")
+                img_resp = self.processor.session.get(iiif_image_url, timeout=20)
+                img_resp.raise_for_status()
+                data = img_resp.content
+                if data:
+                    return data
+            except Exception as exc:  # pragma: no cover
+                self._epub_log(f"IIIF crop failed {page_uuid}: {exc}")
+                continue
+        return None
+
+    def _fetch_and_crop_image(
+        self,
+        page_uuid: str,
+        hpos: float,
+        vpos: float,
+        width: float,
+        height: float,
+        page_width: int,
+        page_height: int,
+    ) -> Optional[bytes]:
+        if not page_uuid or not page_width or not page_height:
+            return None
+        data = self._fetch_image_bytes(page_uuid)
+        if not data:
+            return None
+        try:
+            from PIL import Image
+            import io
+
+            with Image.open(io.BytesIO(data)) as img:
+                scale_x = img.width / page_width if page_width else 1.0
+                scale_y = img.height / page_height if page_height else 1.0
+                x = int(round(max(0.0, hpos) * scale_x))
+                y = int(round(max(0.0, vpos) * scale_y))
+                w = int(round(max(1.0, width) * scale_x))
+                h = int(round(max(1.0, height) * scale_y))
+                # prevent overflow outside image bounds
+                if x + w > img.width:
+                    w = max(1, img.width - x)
+                if y + h > img.height:
+                    h = max(1, img.height - y)
+                box = (x, y, x + w, y + h)
+                cropped = img.crop(box)
+                # Omezit velikost pro EPUB
+                max_side = max(cropped.width, cropped.height)
+                if max_side > 1600:
+                    scale = 1600 / float(max_side)
+                    new_size = (max(1, int(cropped.width * scale)), max(1, int(cropped.height * scale)))
+                    cropped = cropped.resize(new_size, Image.LANCZOS)
+                buf = io.BytesIO()
+                cropped.save(buf, format="JPEG", quality=85, optimize=True)
+                return buf.getvalue()
+        except Exception as exc:  # pragma: no cover - defensive
+            self._epub_log(f"Local crop failed {page_uuid}: {exc}")
+            return None
+    def _process_illustrations(self, soup: BeautifulSoup, book: epub.EpubBook) -> None:
+        if self.params.ignore_images:
+            self._epub_log("Illustrations disabled by ignore_images flag.")
+            return
+        if not soup:
+            return
+        illustration_notes = []
+        for note in soup.find_all("note"):
+            if self._is_illustration_note(note):
+                illustration_notes.append(note)
+        if not illustration_notes:
+            self._epub_log("No illustration notes found in document.")
+            return
+        else:
+            self._epub_log(f"Nalezeno ilustrací: {len(illustration_notes)}")
+        cache: Dict[tuple, bytes] = {}
+        counter = 0
+        for note in illustration_notes:
+            image_uuid = (
+                note.get("data-uuid")
+                or note.get("data-image")
+                or note.get("data-illustration")
+                or note.get("data-id")
+                or ""
+            )
+            image_uuid = str(image_uuid).strip()
+            bbox_raw = str(note.get("data-bbox") or "").strip()
+            page_width = int(note.get("data-page-width") or 0)
+            page_height = int(note.get("data-page-height") or 0)
+            if not page_width or not page_height:
+                self._epub_log(f"Skipping illustration {image_uuid} – missing page dimensions w={page_width} h={page_height}")
+                continue
+            bbox_parts = bbox_raw.split(",") if bbox_raw else []
+            if len(bbox_parts) != 4:
+                self._epub_log(f"Skipping illustration without valid bbox: uuid={image_uuid} bbox='{bbox_raw}'")
+                continue
+            try:
+                hpos, vpos, width_val, height_val = [float(part) for part in bbox_parts]
+            except ValueError:
+                self._epub_log(f"Skipping illustration due to bbox parse error: '{bbox_raw}'")
+                continue
+            if not image_uuid:
+                self._epub_log("Skipping illustration note without uuid.")
+                continue
+            cache_key = (image_uuid, hpos, vpos, width_val, height_val, page_width, page_height)
+            if cache_key in cache:
+                data = cache[cache_key]
+            else:
+                data = self._fetch_iiif_crop(image_uuid, hpos, vpos, width_val, height_val, page_width, page_height)
+                if data is None:
+                    data = self._fetch_and_crop_image(image_uuid, hpos, vpos, width_val, height_val, page_width, page_height)
+                if data:
+                    cache[cache_key] = data
+            if not data:
+                if self.params.omit_note_text:
+                    note.decompose()
+                else:
+                    note.string = "Ilustraci se nepodařilo stáhnout."
+                    note["data-error"] = "fetch_failed"
+                self._epub_log(f"Nepodařilo se stáhnout ilustraci uuid={image_uuid}")
+                continue
+            counter += 1
+            filename = f"images/ill_{counter}.jpg"
+            self._epub_log(f"Přidávám ilustraci {image_uuid} jako {filename}")
+            image_item = epub.EpubItem(file_name=filename, media_type="image/jpeg", content=data)
+            book.add_item(image_item)
+
+            figure = soup.new_tag("figure")
+            figure["class"] = ["illustration"]
+            img = soup.new_tag("img", src=filename)
+            alt_text = "Ilustrace"
+            img["alt"] = alt_text
+            figure.append(img)
+            note.replace_with(figure)
+
     def _build_epub(self, html_document: str) -> str:
         soup = BeautifulSoup(html_document or "", "html.parser")
         body = soup.body or soup
@@ -621,22 +897,6 @@ class ExportBuilder:
             title = current_title or f"Kapitola {len(chapters) + 1}"
             chapters.append((title, list(current_parts)))
 
-        allowed_tags = {"h1", "h2", "h3", "p", "blockquote", "small", "div", "note"}
-        for element in body.find_all(allowed_tags, recursive=True):
-            tag_name = (element.name or "").lower()
-            html_chunk = element.decode()
-            if tag_name in {"h1", "h2", "h3"}:
-                flush()
-                current_title = element.get_text(" ", strip=True) or f"Kapitola {len(chapters) + 1}"
-                current_parts = [html_chunk]
-            else:
-                current_parts.append(html_chunk)
-        flush()
-
-        if not chapters:
-            content = body.decode() if body else ""
-            chapters = [("Kapitola 1", [content])]
-
         book = epub.EpubBook()
         book.set_title(self.params.book_title or "Export")
         book.set_language((self.params.language_hint or "cs")[:5])
@@ -649,6 +909,35 @@ class ExportBuilder:
             book.add_metadata("DC", "creator", author)
 
         self._attach_cover(book)
+        allowed_tags = {"h1", "h2", "h3", "p", "blockquote", "small", "div", "note", "figure", "img"}
+        self._process_illustrations(soup, book)
+        for element in body.find_all(allowed_tags, recursive=True):
+            tag_name = (element.name or "").lower()
+            # Přeskočit obrázek, který je uvnitř figure, aby nevznikly duplikáty
+            if tag_name == "img" and element.find_parent("figure"):
+                continue
+            # Přeskočit vnořené povolené tagy (např. <small> uvnitř <p>)
+            parent = element.parent
+            skip = False
+            while parent and parent != body:
+                if parent.name and parent.name.lower() in allowed_tags and parent.name.lower() != "section":
+                    skip = True
+                    break
+                parent = parent.parent
+            if skip:
+                continue
+            html_chunk = element.decode()
+            if tag_name in {"h1", "h2", "h3"}:
+                flush()
+                current_title = element.get_text(" ", strip=True) or f"Kapitola {len(chapters) + 1}"
+                current_parts = [html_chunk]
+            else:
+                current_parts.append(html_chunk)
+        flush()
+
+        if not chapters:
+            content = body.decode() if body else ""
+            chapters = [("Kapitola 1", [content])]
 
         epub_chapters = []
         for idx, (title, parts) in enumerate(chapters, start=1):

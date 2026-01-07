@@ -64,6 +64,8 @@ PAGE_NUMBER_SHORT_LINE_RATIO_TO_PAGE = 0.2  # Procento šířky stránky, pod kt
 PAGE_NUMBER_ALPHA_REJECTION_RATIO = 0.5     # Pokud podíl písmen přesáhne tento poměr, řádek vyloučíme jako kandidáta
 PAGE_NUMBER_MIN_NONSPACE_FOR_REJECTION = 5  # Krátké řádky (méně znaků) ponecháme i při vysokém podílu písmen
 PAGE_NOTE_STYLE_ATTR = ' style="display:block;font-size:0.82em;color:#1e5aa8;font-weight:bold;"'
+ILLUSTRATION_NOTE_STYLE_ATTR = ' style="display:block;font-size:0.82em;color:#1c9b4a;font-weight:bold;"'
+ILLUSTRATION_NESTED_RATIO = 0.95
 
 # Centralized HTTP timeouts (seconds)
 API_TIMEOUT = 25
@@ -3904,8 +3906,8 @@ class AltoProcessor:
                     #     f"required_ratio={ratio_threshold:.3f}, threshold={small_height_threshold:.2f}"
                     # )
 
-        # Generování HTML - přesně jako v TypeScript
-        result = ""
+        # Generování HTML - přesně jako v TypeScript, rozšířeno o ilustrace
+        positioned_items: List[Tuple[float, float, str]] = []
         for block in blocks:
             text = block['text'].strip()
             if not text:  # Jen neprázdné bloky
@@ -3915,10 +3917,99 @@ class AltoProcessor:
             if block.get('centered'):
                 style_attr = ' style="text-align: center;"'
 
+            # Generuj pouze jeden element na blok: buď <small>, nebo tag bloku
             if block['tag'] == 'small':
-                result += f"<p{style_attr}><small>{text}</small></p>"
+                html_fragment = f"<p{style_attr}><small>{text}</small></p>"
             else:
-                result += f"<{block['tag']}{style_attr}>{text}</{block['tag']}>"
+                html_fragment = f"<{block['tag']}{style_attr}>{text}</{block['tag']}>"
+
+            # Použijeme nejvyšší pozici řádku jako klíč pro řazení
+            line_vpos = block.get('line_vpos') or []
+            line_hpos = block.get('line_centers') or []
+            top_vpos = float(line_vpos[0]) if line_vpos else float('inf')
+            left_hpos = float(line_hpos[0]) if line_hpos else 0.0
+            positioned_items.append((top_vpos, left_hpos, html_fragment))
+
+        # Ilustrace z ALTO: vložíme placeholder note s bbox a rozměry stránky
+        page_width_px = float(page.get('WIDTH', '0') or 0)
+        page_height_px = float(page.get('HEIGHT', '0') or 0)
+        illustration_tags = []
+        ns = "{http://www.loc.gov/standards/alto/ns-v3#}"
+        illustration_tags.extend(root.findall(f'.//{ns}Illustration'))
+        ns2 = "{http://www.loc.gov/standards/alto/ns-v2#}"
+        illustration_tags.extend(root.findall(f'.//{ns2}Illustration'))
+
+        def filter_nested_illustrations(items: List[Any]) -> List[Any]:
+            if len(items) < 2:
+                return items
+            rects: List[Dict[str, Any]] = []
+            for ill in items:
+                try:
+                    vpos = float(ill.get('VPOS', '0') or 0)
+                    hpos = float(ill.get('HPOS', '0') or 0)
+                    width_val = float(ill.get('WIDTH', '0') or 0)
+                    height_val = float(ill.get('HEIGHT', '0') or 0)
+                except ValueError:
+                    continue
+                rects.append({
+                    "el": ill,
+                    "x": hpos,
+                    "y": vpos,
+                    "w": width_val,
+                    "h": height_val,
+                    "area": max(1.0, width_val * height_val),
+                })
+            remove: set[int] = set()
+            n = len(rects)
+            for i in range(n):
+                if i in remove:
+                    continue
+                for j in range(i + 1, n):
+                    if j in remove:
+                        continue
+                    a = rects[i]
+                    b = rects[j]
+                    inter_w = max(0.0, min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"]))
+                    inter_h = max(0.0, min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"]))
+                    inter_area = inter_w * inter_h
+                    if inter_area <= 0:
+                        continue
+                    smaller_area = min(a["area"], b["area"])
+                    if smaller_area <= 0:
+                        continue
+                    ratio = inter_area / smaller_area
+                    if ratio >= ILLUSTRATION_NESTED_RATIO:
+                        # odeber menší obdélník
+                        if a["area"] <= b["area"]:
+                            remove.add(i)
+                        else:
+                            remove.add(j)
+            filtered: List[Any] = []
+            for idx, rect in enumerate(rects):
+                if idx not in remove:
+                    filtered.append(rect["el"])
+            return filtered
+
+        illustration_tags = filter_nested_illustrations(illustration_tags)
+
+        for ill in illustration_tags:
+            try:
+                vpos = float(ill.get('VPOS', '0') or 0)
+                hpos = float(ill.get('HPOS', '0') or 0)
+                width_val = float(ill.get('WIDTH', '0') or 0)
+                height_val = float(ill.get('HEIGHT', '0') or 0)
+            except ValueError:
+                continue
+            bbox = f"{int(hpos)},{int(vpos)},{int(width_val)},{int(height_val)}"
+            note_html = (
+                f'<note class="illustration"{ILLUSTRATION_NOTE_STYLE_ATTR} data-uuid="{uuid}" '
+                f'data-bbox="{bbox}" data-page-width="{int(page_width_px)}" data-page-height="{int(page_height_px)}">'
+                "Ilustrace</note>"
+            )
+            positioned_items.append((vpos, hpos, note_html))
+
+        positioned_items.sort(key=lambda item: (item[0], item[1]))
+        result = "".join(fragment for _, _, fragment in positioned_items)
 
         if page_number_annotations:
             sorted_annotations = sorted(page_number_annotations, key=lambda item: item[0])

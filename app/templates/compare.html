@@ -7474,6 +7474,7 @@
             const formatSelect = document.getElementById('download-format');
             const stripSmall = document.getElementById('download-strip-small');
             const stripNote = document.getElementById('download-strip-note');
+            const ignoreImages = document.getElementById('download-ignore-images');
             const errorCloseBtn = document.getElementById('download-error-close');
             const errorDialog = document.getElementById('download-error-dialog');
             const llmModalSelect = document.getElementById('download-agent-select-llm');
@@ -7501,6 +7502,7 @@
             if (formatSelect) {
                 formatSelect.addEventListener('change', () => {
                     updateDownloadSummary();
+                    syncDownloadImageOption();
                 });
             }
             if (joinerDisable) {
@@ -7525,6 +7527,11 @@
             }
             if (stripNote) {
                 stripNote.addEventListener('change', () => {
+                    updateDownloadSummary();
+                });
+            }
+            if (ignoreImages) {
+                ignoreImages.addEventListener('change', () => {
                     updateDownloadSummary();
                 });
             }
@@ -7683,12 +7690,16 @@
             }
             const stripSmall = document.getElementById('download-strip-small');
             const stripNote = document.getElementById('download-strip-note');
+            const ignoreImages = document.getElementById('download-ignore-images');
             const options = [];
             if (stripSmall && stripSmall.checked) {
                 options.push('bez small');
             }
             if (stripNote && stripNote.checked) {
                 options.push('bez note');
+            }
+            if (ignoreImages && ignoreImages.checked && ignoreImages.offsetParent !== null) {
+                options.push('bez obrázků');
             }
             const optionsLabel = options.length ? ` · ${options.join(', ')}` : '';
             summary.textContent = `${getDownloadSourceLabel(downloadModalState.source)} · ${formatLabel} · ${rangeLabel}${optionsLabel}`;
@@ -7844,6 +7855,42 @@
             return payload;
         }
 
+        function syncDownloadImageOption() {
+            const formatSelect = document.getElementById('download-format');
+            const optionWrapper = document.getElementById('download-ignore-images-wrapper');
+            const checkbox = document.getElementById('download-ignore-images');
+            const label = document.getElementById('download-ignore-images-label');
+            const isEpub = formatSelect && (formatSelect.value || '').toLowerCase() === 'epub';
+            const isOcr = downloadModalState.source === 'ocr';
+            if (!optionWrapper || !checkbox || !label) {
+                return;
+            }
+            optionWrapper.style.display = isEpub ? 'flex' : 'none';
+            if (!isEpub) {
+                checkbox.checked = false;
+                checkbox.disabled = false;
+                label.removeAttribute('title');
+                return;
+            }
+            checkbox.checked = isOcr || checkbox.checked;
+            checkbox.disabled = isOcr;
+            if (isOcr) {
+                label.title = 'OCR výstup neobsahuje informace o ilustracích, proto jsou obrázky vypnuté.';
+            } else {
+                label.removeAttribute('title');
+            }
+        }
+
+        function getIgnoreImagesSelection() {
+            const formatSelect = document.getElementById('download-format');
+            const isEpub = formatSelect && (formatSelect.value || '').toLowerCase() === 'epub';
+            if (!isEpub) {
+                return false;
+            }
+            const checkbox = document.getElementById('download-ignore-images');
+            return Boolean(checkbox && checkbox.checked);
+        }
+
         function extractAuthorsFromMods(mods) {
             const authors = [];
             if (!Array.isArray(mods)) {
@@ -7906,6 +7953,7 @@
             const rangeValue = rangeMode === 'custom' && customInput ? customInput.value.trim() : null;
             const stripSmall = document.getElementById('download-strip-small');
             const stripNote = document.getElementById('download-strip-note');
+            const ignoreImages = getIgnoreImagesSelection();
             const apiBase = (currentLibrary && currentLibrary.api_base)
                 || (currentBook.library && currentBook.library.api_base)
                 || '';
@@ -7927,6 +7975,7 @@
                 languageHint: DEFAULT_LANGUAGE_HINT,
                 stripSmallText: Boolean(stripSmall && stripSmall.checked),
                 stripNoteText: Boolean(stripNote && stripNote.checked),
+                ignoreImages,
             };
         }
 
@@ -8221,6 +8270,7 @@
             backdrop.classList.add('is-visible');
             backdrop.setAttribute('aria-hidden', 'false');
             updateDownloadSummary();
+            syncDownloadImageOption();
             updateDownloadConfirmState();
         }
 
@@ -10564,6 +10614,10 @@
                 </div>
                 <div class="download-option-group">
                     <label>Možnosti obsahu</label>
+                    <label id="download-ignore-images-wrapper" style="display:none;align-items:center;gap:6px;">
+                        <input type="checkbox" id="download-ignore-images">
+                        <span id="download-ignore-images-label">Ignorovat obrázky</span>
+                    </label>
                     <label style="display:flex;align-items:center;gap:6px;">
                         <input type="checkbox" id="download-strip-small" checked>
                         <span>Odebrat malé texty (&lt;small&gt;)</span>

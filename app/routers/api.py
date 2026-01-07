@@ -73,6 +73,7 @@ class ExportRequest(BaseModel):
     language_hint: str = Field("cs", alias="languageHint")
     strip_small_text: bool = Field(True, alias="stripSmallText")
     strip_note_text: bool = Field(True, alias="stripNoteText")
+    ignore_images: bool = Field(False, alias="ignoreImages")
 
 
 class DownloadRequest(BaseModel):
@@ -86,6 +87,7 @@ class DownloadRequest(BaseModel):
     output_filename: Optional[str] = Field(None, alias="outputName")
     api_base: Optional[str] = Field(None, alias="apiBase")
     language_hint: str = Field("cs", alias="languageHint")
+    ignore_images: bool = Field(False, alias="ignoreImages")
 
 
 def _select_cover_uuid(pages: list[dict[str, Any]]) -> Optional[str]:
@@ -112,6 +114,7 @@ def _build_export_params(request: ExportRequest) -> ExportJobParams:
     params = ExportJobParams(
         authors=list(request.authors or []),
         cover_uuid=request.cover_uuid or _select_cover_uuid(request.pages),
+        ignore_images=bool(request.ignore_images or request.source == "ocr"),
         source=request.source,
         export_format=request.export_format,
         range_mode=request.range_mode,
@@ -168,6 +171,7 @@ def start_download(payload: DownloadRequest) -> JSONResponse:
     params = ExportJobParams(
         authors=payload.authors or _extract_authors(mods_metadata),
         cover_uuid=payload.cover_uuid or _select_cover_uuid(pages),
+        ignore_images=bool(payload.ignore_images),
         source="llm" if payload.llm_agent else "algorithmic",
         export_format=fmt,
         range_mode=range_mode,

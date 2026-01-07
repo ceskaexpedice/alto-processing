@@ -29,6 +29,7 @@ class ExportJobParams:
     current_page_uuid: str
     pages: List[Dict[str, Any]]
     api_base: Optional[str]
+    ignore_images: bool = False
     authors: List[str] = field(default_factory=list)
     cover_uuid: Optional[str] = None
     joiner: Dict[str, Any] = field(default_factory=dict)
