@@ -44,6 +44,7 @@ HEADING_FONT_GAP_THRESHOLD = 1.2        # Práh pro rozdíl ve velikosti fontu p
 HEADING_FONT_RATIO_MULTIPLIER = 0.56    # Koeficient pro snížení prahu pro bloky s nadpisovými fonty [>0.55]
 HEADING_FONT_MAX_RATIO = 0.4            # Maximální podíl řádků s fontem, aby byl považován za nadpisový
 HEADING_FONT_MERGE_TOLERANCE = 0.1      # Povolená relativní odchylka mezi velikostmi písma při spojování nadpisů
+HEADING_MAX_WORDS = 25                  # Pokud blok překročí tento počet slov, nebude povýšen na h1/h2 (ochrana před dlouhými odstavci)
 
 # Konstanty pro rozhodování o "malém" textu (poznámky pod čarou, popisky obrázků, atd.)
 SMALL_RATIO = 0.92                      # Práh pro "malý" text: 0.92 * průměrná výška
@@ -2527,10 +2528,13 @@ class AltoProcessor:
                 total_words = len(heights_for_ratio)
 
                 if total_words > 0:
+                    if total_words > HEADING_MAX_WORDS:
+                        tag = 'p'
+                        # _debug(f"DEBUG finalize_block: prevented promoting to h1/h2 because total_words={total_words} > HEADING_MAX_WORDS={HEADING_MAX_WORDS}")
                     # If this block was created by a negative horizontal split (back-split), require
                     # a minimum number of words to consider promoting it to a heading. This avoids
                     # single-word fragments (often caused by layout splits) being misclassified as h2/h1.
-                    if block_data.get('split_reason') == 'horizontal_indent' and total_words < 3:
+                    elif block_data.get('split_reason') == 'horizontal_indent' and total_words < 3:
                         tag = 'p'
                         # _debug(
                         #     f"DEBUG finalize_block: prevented promoting to h1/h2 due to negative-split and total_words={total_words} < 3"
