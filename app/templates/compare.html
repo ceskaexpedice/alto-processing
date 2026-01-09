@@ -1960,6 +1960,7 @@
                                 <div class="stitch-merge-column">
                                     <div class="stitch-merge-note">Spojená verze</div>
                                     <div id="stitch-start-merged" class="stitch-merge-snippet" aria-live="polite"></div>
+                                    <div id="manual-joiner-decision" class="stitch-merge-note" style="display:none;"></div>
                                 </div>
                             </div>
                         </section>
@@ -1975,6 +1976,7 @@
                                 <div class="stitch-merge-column">
                                     <div class="stitch-merge-note">Spojená verze</div>
                                     <div id="stitch-end-merged" class="stitch-merge-snippet" aria-live="polite"></div>
+                                    <div id="manual-joiner-decision-end" class="stitch-merge-note" style="display:none;"></div>
                                 </div>
                             </div>
                         </section>
@@ -2803,7 +2805,32 @@
                 source: 'manual',
                 decision: decisions,
             });
+            setManualJoinerDecisionLabel(decisions);
             return decisions;
+        }
+
+        function setManualJoinerDecisionLabel(decisions) {
+            const indicatorStart = document.getElementById('manual-joiner-decision');
+            const indicatorEnd = document.getElementById('manual-joiner-decision-end');
+            const mapLabel = (code) => {
+                if (code === '2') return '2: Merge';
+                if (code === '1') return '1: Join';
+                if (code === '0') return '0: Split';
+                return '';
+            };
+            const applyLabel = (el, code) => {
+                if (!el) return;
+                const label = mapLabel(code);
+                el.textContent = label;
+                el.style.display = label ? 'block' : 'none';
+            };
+            if (!decisions || typeof decisions !== 'object') {
+                applyLabel(indicatorStart, null);
+                applyLabel(indicatorEnd, null);
+                return;
+            }
+            applyLabel(indicatorStart, decisions.start);
+            applyLabel(indicatorEnd, decisions.end);
         }
 
         function buildJoinerAgentPayloadFromContext(context) {
@@ -3090,6 +3117,7 @@
             if (settings.resetMerged) {
                 renderStitchSnippet('stitch-start-merged', null, { allowHtml: false, placeholder: mergedPlaceholder });
                 renderStitchSnippet('stitch-end-merged', null, { allowHtml: false, placeholder: mergedPlaceholder });
+                setManualJoinerDecisionLabel(null);
             } else {
                 renderStitchSnippet('stitch-start-merged', startSection ? startSection.merged : null, { allowHtml: Boolean(startSection && startSection.merged && startSection.merged.html), placeholder: mergedPlaceholder });
                 renderStitchSnippet('stitch-end-merged', endSection ? endSection.merged : null, { allowHtml: Boolean(endSection && endSection.merged && endSection.merged.html), placeholder: mergedPlaceholder });
@@ -3239,7 +3267,7 @@
                     const repaired = repairJsonStringLineBreaks(trimmed);
                     if (repaired && repaired !== trimmed) {
                         try {
-                            console.warn('[JoinerDebug] Joiner JSON repaired before parse.');
+                            console.warn('[UI_JOINER_DEBUG] Joiner JSON repaired before parse.');
                             return { parsed: JSON.parse(repaired), error: null, usedRepair: true, repairedText: repaired };
                         } catch (repairError) {
                             return { parsed: null, error: repairError, usedRepair: true, repairedText: repaired };
@@ -3335,11 +3363,11 @@
                     return true;
                 }
                 if (parseError) {
-                    console.warn('Joiner agent nevrátil validní JSON:', parseError);
+                    console.warn('[UI_JOINER_DEBUG] Joiner agent nevrátil validní JSON:', parseError);
                     if (usedRepair && repairedText) {
-                        console.warn('[JoinerDebug] Repaired joiner JSON candidate:', repairedText);
+                        console.warn('[UI_JOINER_DEBUG] Repaired joiner JSON candidate:', repairedText);
                     } else {
-                        console.warn('[JoinerDebug] Raw joiner result text:', rawText);
+                        console.warn('[UI_JOINER_DEBUG] Raw joiner result text:', rawText);
                     }
                 }
                 const fallbackHtml = `<div class="muted">${escapeHtml(rawText)}</div>`;
@@ -5047,18 +5075,18 @@
                 const repaired = repairJsonStringLineBreaks(trimmed);
                 if (repaired && repaired !== trimmed) {
                     try {
-                        console.warn('[JoinerDebug] parseAgentResultDocument repaired newline characters.');
+                        console.warn('[UI_JOINER_DEBUG] parseAgentResultDocument repaired newline characters.');
                         return JSON.parse(repaired);
                     } catch (repairError) {
                         if (!(options && options.silent)) {
-                            console.warn('[JoinerDebug] parseAgentResultDocument repair failed:', repairError);
-                            console.warn('[JoinerDebug] Original text:', trimmed);
-                            console.warn('[JoinerDebug] Repaired text:', repaired);
+                            console.warn('[UI_JOINER_DEBUG] parseAgentResultDocument repair failed:', repairError);
+                            console.warn('[UI_JOINER_DEBUG] Original text:', trimmed);
+                            console.warn('[UI_JOINER_DEBUG] Repaired text:', repaired);
                         }
                     }
                 } else if (!(options && options.silent)) {
-                    console.warn('[JoinerDebug] parseAgentResultDocument parse error:', err);
-                    console.warn('[JoinerDebug] Document text:', trimmed);
+                    console.warn('[UI_JOINER_DEBUG] parseAgentResultDocument parse error:', err);
+                    console.warn('[UI_JOINER_DEBUG] Document text:', trimmed);
                 }
                 return null;
             }

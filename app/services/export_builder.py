@@ -37,7 +37,7 @@ BLOCK_TAGS = {
     "note",
 }
 HYPHENLIKE = "-–—‑‒−‐"
-SENTENCE_END_RE = re.compile(r"[.!?…»\]\)]\s*$")
+SENTENCE_END_RE = re.compile(r"[.!?…][\"'„“”«»‚‘’‹›)\]\s]*$")
 SENTENCE_START_RE = re.compile(r"^[\s\"'„“”«»‚‘’‹›(\[{\-—–]*[A-ZÀ-Ž]")
 LEADING_PUNCT_RE = re.compile(r"^[,.;:!?)]")
 
@@ -303,8 +303,10 @@ class ExportBuilder:
             right_snippet = nxt.first_non_note_snippet()
             if not left_snippet or not right_snippet:
                 continue
+            joiner_label = f"[JOINER_DEBUG] pair {current.plan.index}->{nxt.plan.index}"
             if manual_mode or not agent_config:
                 decision = self._manual_join_decision(left_snippet, right_snippet)
+                self._log_debug(f"{joiner_label} manual decision={decision}")
             else:
                 context = self._build_joiner_context(current, nxt, left_snippet, right_snippet)
                 if not context:
@@ -313,6 +315,7 @@ class ExportBuilder:
                 payload["stitch_context"] = context
                 result = self._run_agent(agent_config, payload, "napojování stran")
                 decision = self._parse_joiner_decision(str(result.get("text") or ""))
+                self._log_debug(f"{joiner_label} agent decision={decision}")
             if decision in {"join", "merge"}:
                 self._merge_page_pair(current, nxt, left_snippet, right_snippet)
 
