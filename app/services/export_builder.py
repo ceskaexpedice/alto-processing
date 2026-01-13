@@ -480,6 +480,15 @@ class ExportBuilder:
         omit_note = bool(self.params.omit_note_text)
         ignore_images = bool(getattr(self.params, "ignore_images", False))
         export_format = (self.params.export_format or "").lower()
+        fallback_illustrations: List[Tag] = []
+        if (
+            export_format == "epub"
+            and not ignore_images
+            and plan.cached_python
+        ):
+            fallback_wrapper = BeautifulSoup(f"<div>{plan.cached_python}</div>", "html.parser").div
+            if fallback_wrapper:
+                fallback_illustrations = fallback_wrapper.find_all("note", class_="illustration")
         if wrapper:
             for child in wrapper.children:
                 if not isinstance(child, Tag):
@@ -487,19 +496,49 @@ class ExportBuilder:
                 tag_name = (child.name or "").lower()
                 if tag_name not in BLOCK_TAGS:
                     continue
+                is_illustration = self._is_illustration_note(child)
+                if (
+                    is_illustration
+                    and export_format == "epub"
+                    and not ignore_images
+                    and fallback_illustrations
+                ):
+                    needs_bbox = not (child.get("data-bbox") and child.get("data-page-width") and child.get("data-page-height"))
+                    if needs_bbox:
+                        fallback = fallback_illustrations.pop(0)
+                        # Pokud LLM odstranil metadata, doplníme je z algoritmického HTML.
+                        for attr in ("data-bbox", "data-page-width", "data-page-height", "data-uuid", "data-image", "data-illustration", "data-id"):
+                            if not child.get(attr) and fallback.get(attr):
+                                child[attr] = fallback[attr]
+                    # Pokud chybí bbox/rozměry a jsou v textu, vytáhneme je.
+                    if needs_bbox:
+                        bbox_from_text = self._extract_bbox_from_text(child)
+                        page_dims = self._extract_page_dims_from_text(child)
+                        if bbox_from_text and not child.get("data-bbox"):
+                            child["data-bbox"] = ",".join(str(int(v)) for v in bbox_from_text)
+                        if page_dims:
+                            if not child.get("data-page-width"):
+                                child["data-page-width"] = str(page_dims[0])
+                            if not child.get("data-page-height"):
+                                child["data-page-height"] = str(page_dims[1])
                 block_html = child.decode()
-                if ignore_images and self._is_illustration_note(child):
+                if ignore_images and is_illustration:
                     continue
                 if omit_small and self._is_small_markup(block_html, tag_name):
                     continue
                 if omit_note and self._is_note_markup(block_html, tag_name):
                     # Pro EPUB necháme ilustrační note projít (převádí se na obrázek),
                     # pro ostatní formáty je odstranit.
-                    if export_format != "epub" or not self._is_illustration_note(child):
+                    if export_format != "epub" or not is_illustration:
                         continue
                 text = child.get_text(" ", strip=True)
                 if not text:
-                    continue
+                    # Ilustrace často nemají text, ale pro EPUB potřebujeme zachovat note element,
+                    # aby se později převedl na <img>. Přidáme zástupný popisek.
+                    if is_illustration and export_format == "epub" and not ignore_images:
+                        text = "Ilustrace"
+                    else:
+                        continue
                 blocks.append(block_html)
                 snippets.append(Snippet(text=text, html=block_html, tag=tag_name))
         if not blocks:
@@ -508,10 +547,6 @@ class ExportBuilder:
             else:
                 self._log_debug(f"Stránka {plan.uuid} po parsování nemá žádné bloky.")
             return None
-            text = wrapper.get_text(" ", strip=True) if wrapper else normalized
-            markup = normalized or (f"<p>{escape(text)}</p>" if text else "<p></p>")
-            blocks = [markup]
-            snippets = [Snippet(text=text or "", html=markup, tag="p")]
         return PageContent(plan=plan, blocks=blocks, snippets=snippets)
 
     @staticmethod
@@ -547,6 +582,48 @@ class ExportBuilder:
         if data_kind == "illustration":
             return True
         return False
+
+    @staticmethod
+    def _extract_bbox_from_text(tag: Tag) -> Optional[tuple[float, float, float, float]]:
+        if not tag or not tag.string:
+            return None
+        text = tag.get_text(" ", strip=True)
+        if not text:
+            return None
+        # očekáváme "Ilustrace: bbox=154,336,1609,2153 page=2117x3056"
+        parts = text.split("bbox=", 1)
+        if len(parts) != 2:
+            return None
+        bbox_part = parts[1].split()[0] if parts[1] else ""
+        if not bbox_part or "," not in bbox_part:
+            return None
+        coords = bbox_part.split(",")
+        if len(coords) != 4:
+            return None
+        try:
+            hpos, vpos, width_val, height_val = [float(c) for c in coords]
+            return (hpos, vpos, width_val, height_val)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_page_dims_from_text(tag: Tag) -> Optional[tuple[int, int]]:
+        if not tag:
+            return None
+        text = tag.get_text(" ", strip=True)
+        if not text or "page=" not in text:
+            return None
+        after = text.split("page=", 1)[1]
+        token = after.split()[0] if after else ""
+        if "x" not in token:
+            return None
+        left, right = token.split("x", 1)
+        try:
+            w = int(left)
+            h = int(right)
+            return (w, h)
+        except ValueError:
+            return None
 
     def _convert_format(self, html_document: str) -> str:
         format_kind = self.params.export_format
@@ -1007,7 +1084,10 @@ class ExportBuilder:
                 continue
             elif block_type == "note":
                 tag = "note"
-                attrs = ' style="display:block;font-size:0.82em;color:#1e5aa8;font-weight:bold;"'
+                if normalized.lower().startswith("ilustrace"):
+                    attrs = ' class="illustration" style="display:block;font-size:0.82em;color:#1c9b4a;font-weight:bold;"'
+                else:
+                    attrs = ' style="display:block;font-size:0.82em;color:#1e5aa8;font-weight:bold;"'
             elif block_type == "centered":
                 tag = "div"
                 attrs = ' class="centered"'

@@ -1064,6 +1064,12 @@
         .result-rendered {
             line-height: 1.65;
         }
+        .result-rendered note.illustration {
+            display: block;
+            font-size: 0.82em;
+            color: #1c9b4a;
+            font-weight: 700;
+        }
         .result-html-section {
             margin-top: 16px;
         }
@@ -2195,7 +2201,7 @@
         let algorithmicResultVisible = false;
         let algorithmicReadyPromise = null;
         const tooltipTimers = new Map();
-        const NOTE_STYLE_ATTR = ' style=\"display:block;font-size:0.82em;color:#1e5aa8;font-weight:bold;\"';
+        const NOTE_STYLE_ATTR = ' style=\"display:block;font-size:0.82em;color:#1c9b4a;font-weight:bold;\"';
         // --- LLM agent management ---
         function createAgentContext(config) {
             return {
@@ -5120,7 +5126,11 @@
                         break;
                     case 'note':
                         tag = 'note';
-                        attrs = NOTE_STYLE_ATTR;
+                        if (text.toLowerCase().startsWith('ilustrace')) {
+                            attrs = ' class="illustration" style="display:block;font-size:0.82em;color:#1c9b4a;font-weight:bold;"';
+                        } else {
+                            attrs = NOTE_STYLE_ATTR;
+                        }
                         break;
                     case 'centered':
                         tag = 'div';
@@ -5239,6 +5249,38 @@
             return escapeHtml(html || '');
         }
 
+        function markIllustrationNotes(container) {
+            if (!container) {
+                return;
+            }
+            container.querySelectorAll('note').forEach((note) => {
+                const text = (note.textContent || '').trim().toLowerCase();
+                if (text.startsWith('ilustrace')) {
+                    note.classList.add('illustration');
+                    // Přepiš případné zděděné/inline barvy na sjednocenou zelenou
+                    note.style.display = 'block';
+                    note.style.fontSize = '0.82em';
+                    note.style.fontWeight = '700';
+                    note.style.setProperty('color', '#1c9b4a', 'important');
+                }
+            });
+        }
+
+        let agentNoteObserver = null;
+        function ensureAgentNoteObserver() {
+            if (agentNoteObserver) {
+                return;
+            }
+            const root = document.getElementById('agent-results');
+            if (!root) {
+                return;
+            }
+            agentNoteObserver = new MutationObserver(() => {
+                markIllustrationNotes(root);
+            });
+            agentNoteObserver.observe(root, { childList: true, subtree: true });
+        }
+
         function setAgentResultPanels(originalHtml, correctedContent, correctedIsHtml) {
             lastAgentOriginalHtml = originalHtml || '';
             lastAgentCorrectedHtml = correctedContent || '';
@@ -5279,6 +5321,7 @@
 
             if (originalHtml) {
                 originalEl.innerHTML = `<pre>${originalHtml}</pre>`;
+                markIllustrationNotes(originalEl);
             } else {
                 originalEl.innerHTML = '<div class="muted">Žádná data.</div>';
             }
@@ -5287,9 +5330,12 @@
                 correctedEl.innerHTML = correctedIsHtml
                     ? `<pre>${correctedContent}</pre>`
                     : `<pre>${escapeHtml(correctedContent)}</pre>`;
+                markIllustrationNotes(correctedEl);
             } else {
                 correctedEl.innerHTML = '<div class="muted">Agent nevrátil HTML náhled.</div>';
             }
+            // Někdy mohou jiné skripty přepsat obsah; observer zajistí opětovné zabarvení ilustrací.
+            ensureAgentNoteObserver();
 
             if (correctedContent && correctedContent.trim()) {
                 resolveComparisonWaiters('corrector', {
@@ -10609,10 +10655,10 @@
                 <div class="download-option-group">
                     <label for="download-format">Formát souboru</label>
                     <select id="download-format">
+                        <option value="epub">EPUB (.epub)</option>
                         <option value="html">HTML</option>
                         <option value="txt">Text (.txt)</option>
                         <option value="md">Markdown (.md)</option>
-                        <option value="epub">EPUB (.epub)</option>
                     </select>
                 </div>
                 <div class="download-option-group">

@@ -4005,10 +4005,17 @@ class AltoProcessor:
             except ValueError:
                 continue
             bbox = f"{int(hpos)},{int(vpos)},{int(width_val)},{int(height_val)}"
+            bbox_label = f"bbox={int(hpos)},{int(vpos)},{int(width_val)},{int(height_val)}"
+            page_label = f"page={int(page_width_px)}x{int(page_height_px)}" if page_width_px and page_height_px else ""
+            note_text = "Ilustrace"
+            if bbox_label:
+                note_text = f"Ilustrace: {bbox_label}"
+                if page_label:
+                    note_text = f"{note_text} {page_label}"
             note_html = (
                 f'<note class="illustration"{ILLUSTRATION_NOTE_STYLE_ATTR} data-uuid="{uuid}" '
                 f'data-bbox="{bbox}" data-page-width="{int(page_width_px)}" data-page-height="{int(page_height_px)}">'
-                "Ilustrace</note>"
+                f"{note_text}</note>"
             )
             positioned_items.append((vpos, hpos, note_html))
 
