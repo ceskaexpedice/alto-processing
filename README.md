@@ -1,6 +1,6 @@
 # Alto Processing Web Service
 
-FastAPI aplikace s UI (šablona `app/templates/compare.html`) a REST endpointy `/process`, `/preview`, `/diff`, `/agents/*`, `/exports/*`. Běží jako jeden proces; UI komunikuje přes REST.
+FastAPI aplikace s UI (šablona `app/templates/compare.html`) a REST endpointy `/process`, `/preview`, `/diff`, `/agents/*`, `/exports/*`. Umí algoritmický převod ALTO, LLM korekce, OCR, export do TXT/HTML/MD/EPUB včetně ilustrací (K5 manuální ořez, K7 IIIF). Běží jako jeden proces; UI komunikuje přes REST.
 
 ## Co potřebujete
 - Python 3.10+
@@ -16,7 +16,7 @@ source .webenv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
-3) Node závislosti a případný rebuild TS:
+3) Node závislosti a případný rebuild TS (jen pro legacy `dist/run_original.js`):
 ```bash
 npm install
 npx tsc   # jen pokud potřebuješ přebuildit dist/run_original.js
@@ -78,10 +78,21 @@ Volitelně můžete přidat pravidelný restart aplikačního kontejneru (např.
 - UI na `/`, REST `/process`, `/preview`, `/diff`, `/agents/*`, `/exports/*`.
 - `/healthz` pro monitoring.
 - Token v hlavičce `Authorization: Bearer <ALTO_WEB_AUTH_TOKEN>` (healthz je veřejné, chráněné endpointy vrací 303/401 bez tokenu).
+- Lokální testování: BASE typicky `http://127.0.0.1:8080` (bez `/auth`). `/auth` je jen HTML login pro cookie.
 
 ### Download přes API
 `POST /download` → vrátí `job_id`. Stav zjistíte přes `GET /exports/{job_id}` (obsahuje `state`, `progress.percent`, `progress.eta_seconds`) a výsledek stáhnete z `GET /exports/{job_id}/download`.
-Tělo (JSON): `uuid` (povinné), `format` (`txt` default/`html`/`md`), `range` (`all` nebo např. `"7-11,23"`), `llmAgent` (např. `{ "name": "cleanup-diff-generated-mid" }`), `dropSmall` (bool), `outputName`.
+
+Podporované pole requestu:
+- `uuid` (povinné) – UUID knihy nebo stránky.
+- `format` – `txt` (default) | `html` | `md` | `epub`.
+- `range` – `all` / `book` / `*` nebo např. `"7-11,23"`; při UUID stránky a bez `range` se použije jen daná stránka.
+- `llmAgent` – např. `{ "name": "cleanup-diff-generated-mid" }` (přepne source na LLM).
+- `dropSmall` – odfiltruje malé bloky (mapuje se na `omit_small_text`).
+- `ignoreImages` – u EPUB potlačí obrázky (pro OCR se ignorují vždy).
+- `languageHint` – jazykový hint pro agenty, default `cs`.
+- `apiBase` – volitelná Kramerius API URL; přebije autodetekci.
+- `authors`, `coverUuid`, `outputName` – volitelná metadata (cover se jinak vybere automaticky z prioritních stránek).
 
 Příklad (produkce, BASE míří na `/auth`):
 ```bash
@@ -91,9 +102,12 @@ curl -X POST "$BASE/download" \
   -H "Content-Type: application/json" \
   -d '{
     "uuid": "49c6424a-c820-4224-9475-4aa0d8a9d844",
-    "format": "html",
+    "format": "epub",
     "range": "all",
-    "outputName": "output.html"
+    "dropSmall": true,
+    "ignoreImages": false,
+    "languageHint": "cs",
+    "outputName": "output.epub"
   }'
 ```
 Polling (stav + procenta + ETA) a stažení:
@@ -125,15 +139,21 @@ Ukázka odpovědi stavu:
 ALTO_TOKEN=TVŮJ_TOKEN python cli/download.py \
   --url http://localhost:8080 \
   --uuid 49c6424a-c820-4224-9475-4aa0d8a9d844 \
-  --format txt \
+  --format epub \
   --range "7-11,23" \
   --llm-agent '{"name":"cleanup-diff-generated-mid"}' \
+  --api-base https://kramerius5.nkp.cz/search/api/v5.0 \
   --drop-small \
-  --output output.txt
+  --ignore-images \
+  --language-hint cs \
+  --output output.epub
 ```
+CLI přepínače: `--ignore-images`, `--api-base`, `--language-hint`, `--output-name` (jinak se bere z `--output`), `--drop-small`, `--llm-agent`.
 
 ## Poznámky
 - Node.js je jen kvůli legacy TypeScriptu; pokud bundl nebude potřeba, lze NPM kroky z Dockerfile odstranit.
 - `WEB_CONCURRENCY` ve `start.sh` nastav na počet CPU jader.
 - Exportní joby ukládají do dočasných souborů; při restartu zmizí. Bind mounty `agents/` a `config/` si drž ve storage.
-- Server musí mít odchozí HTTPS k API Krameria a OpenRouter/OpenAI; jinak zpracování padne.
+- Server musí mít odchozí HTTPS k API Krameria (včetně K7/IIIF) a OpenRouter/OpenAI; jinak zpracování padne.
+- Ilustrace: ALTO se převádí na `<note class="illustration" data-bbox=... data-page-width=...>`; EPUB může stáhnout obrázky (K7 přes IIIF, K5 ořez).
+- Podporovaní provider filtrování a modely v UI (OpenRouter/CERIT), vlastní LLM úpravy (custom agent), manual-joiner pro napojování stran.
