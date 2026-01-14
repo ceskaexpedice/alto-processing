@@ -408,6 +408,57 @@
             font-size: 14px;
             box-sizing: border-box;
         }
+        .api-base-wrapper {
+            position: relative;
+        }
+        .api-base-wrapper input[type="text"] {
+            padding-right: 44px;
+        }
+        .api-base-warning {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            padding: 3px;
+            border: none;
+            background: transparent;
+            cursor: default;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+        }
+        .api-base-warning svg {
+            width: 22px;
+            height: 22px;
+            display: block;
+        }
+        .api-base-tooltip {
+            position: absolute;
+            top: calc(85%);
+            right: 10px;
+            transform: translateY(0);
+            background: rgba(255, 250, 235, 0.98);
+            color: #8a4f00;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid #f7c948;
+            box-shadow: 0 8px 16px rgba(15, 23, 42, 0.14);
+            opacity: 0;
+            pointer-events: none;
+            white-space: nowrap;
+            transition: opacity 0.08s ease, transform 0.08s ease;
+            z-index: 40;
+        }
+        .api-base-tooltip.is-visible {
+            opacity: 1;
+        }
+        .api-base-warning.is-visible {
+            display: inline-flex;
+        }
         textarea {
             width: 100%;
             padding: 8px;
@@ -1503,7 +1554,16 @@
 
                     <div class="form-group">
                         <label for="api-base">Kramerius API URL:</label>
-                        <input type="text" id="api-base" name="api-base" value="https://api.kramerius.mzk.cz/search/api/client/v7.0" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+                        <div class="api-base-wrapper">
+                            <input type="text" id="api-base" name="api-base" value="https://api.kramerius.mzk.cz/search/api/client/v7.0" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+                            <span id="api-base-warning" class="api-base-warning" aria-label="" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                    <path fill="#f7c948" stroke="#1f2933" stroke-width="1.4" d="M12 3.2c-.33 0-.65.18-.82.48L2.38 19.35c-.35.62.09 1.4.82 1.4h17.6c.73 0 1.17-.78.82-1.4L12.82 3.68A.95.95 0 0 0 12 3.2Z"/>
+                                    <path fill="#1f2933" d="M11 9.5c0-.55.45-1 1-1s1 .45 1 1v4c0 .55-.45 1-1 1s-1-.45-1-1v-4Zm1 8.3a1.3 1.3 0 1 1 0-2.6 1.3 1.3 0 0 1 0 2.6Z"/>
+                                </svg>
+                            </span>
+                            <div id="api-base-warning-tooltip" class="api-base-tooltip" role="tooltip" aria-hidden="true"></div>
+                        </div>
                     </div>
                     <div class="form-group uuid-group">
                         <label for="uuid">UUID stránky nebo dokumentu:</label>
@@ -9999,6 +10059,95 @@
             return input ? (input.value || "").trim() : "";
         }
 
+        function hideApiBaseWarning() {
+            const warning = document.getElementById("api-base-warning");
+            const tooltip = document.getElementById("api-base-warning-tooltip");
+            if (!warning) {
+                return;
+            }
+            warning.classList.remove("is-visible");
+            warning.removeAttribute("aria-label");
+            warning.setAttribute("aria-hidden", "true");
+            if (tooltip) {
+                tooltip.textContent = "";
+                tooltip.classList.remove("is-visible");
+                tooltip.setAttribute("aria-hidden", "true");
+            }
+        }
+
+        function showApiBaseWarning(message) {
+            const warning = document.getElementById("api-base-warning");
+            const tooltip = document.getElementById("api-base-warning-tooltip");
+            if (!warning) {
+                return;
+            }
+            const text = (message || "").trim();
+            if (!text) {
+                hideApiBaseWarning();
+                return;
+            }
+            warning.setAttribute("aria-hidden", "false");
+            warning.setAttribute("aria-label", text);
+            warning.classList.add("is-visible");
+            if (tooltip) {
+                tooltip.textContent = text;
+                tooltip.setAttribute("aria-hidden", "false");
+                tooltip.classList.add("is-visible");
+                window.clearTimeout(tooltip.dataset.hideTimerId ? Number(tooltip.dataset.hideTimerId) : 0);
+                const timerId = window.setTimeout(() => {
+                    tooltip.classList.remove("is-visible");
+                    tooltip.setAttribute("aria-hidden", "true");
+                    tooltip.dataset.hideTimerId = "";
+                }, 3000);
+                tooltip.dataset.hideTimerId = String(timerId);
+            }
+        }
+
+        function updateApiBaseWarning(actualApiBase, libraryLabel) {
+            const selected = getSelectedApiBase();
+            const normalize = (value) => (value || "").trim().replace(/\/+$/, "");
+            const selectedNormalized = normalize(selected);
+            const actualNormalized = normalize(actualApiBase);
+            if (!selectedNormalized || !actualNormalized || selectedNormalized === actualNormalized) {
+                hideApiBaseWarning();
+                return;
+            }
+            const label = (libraryLabel || actualNormalized || "").trim();
+            const message = `Zadaný Kramerius neobsahuje toto UUID. Použito: ${label}`;
+            showApiBaseWarning(message);
+        }
+
+        function setupApiBaseWarningTooltip() {
+            const warning = document.getElementById("api-base-warning");
+            const tooltip = document.getElementById("api-base-warning-tooltip");
+            if (!warning || !tooltip) {
+                return;
+            }
+            const clearTimer = () => {
+                if (tooltip.dataset.hideTimerId) {
+                    window.clearTimeout(Number(tooltip.dataset.hideTimerId));
+                    tooltip.dataset.hideTimerId = "";
+                }
+            };
+            const show = () => {
+                clearTimer();
+                if (!tooltip.textContent) {
+                    return;
+                }
+                tooltip.classList.add("is-visible");
+                tooltip.setAttribute("aria-hidden", "false");
+            };
+            const hide = () => {
+                clearTimer();
+                tooltip.classList.remove("is-visible");
+                tooltip.setAttribute("aria-hidden", "true");
+            };
+            warning.addEventListener("pointerenter", show);
+            warning.addEventListener("pointerleave", hide);
+            warning.addEventListener("focus", show);
+            warning.addEventListener("blur", hide);
+        }
+
         function ensureCachesForSelectedApiBase(forcedValue) {
             const selected = typeof forcedValue === "string" ? forcedValue.trim() : getSelectedApiBase();
             if (selected === activeApiBaseKey) {
@@ -10074,6 +10223,7 @@
             currentBook = data.book || null;
             currentPage = data.currentPage || null;
             currentLibrary = data.library || (currentBook && currentBook.library) || null;
+            updateApiBaseWarning(currentLibrary && currentLibrary.api_base, currentLibrary && currentLibrary.label);
 
             if (currentBook && currentLibrary && !currentBook.library) {
                 currentBook.library = currentLibrary;
@@ -10558,6 +10708,7 @@
             initializeComparisonUI();
             initializeComparison2UI();
             initializeDownloadUI();
+            setupApiBaseWarningTooltip();
             setupSectionVisibilityToggles();
             updateDrawerTogglePositions();
             ensureThumbnailDrawerResizeObserver();

@@ -1356,9 +1356,14 @@ class AltoProcessor:
             return {}
 
         cached = self._get_cached_item(raw_uuid)
-        if cached and self._has_core_item_fields(cached):
+        base_used = cached.get("_api_base_used") if isinstance(cached, dict) else None
+        if cached and self._has_core_item_fields(cached) and base_used:
+            # Respect původně úspěšný Kramerius i při cache hitu.
+            self._remember_successful_base(base_used)
             self._stat_increment("info_cache_hit")
-            return cached
+            result = dict(cached)
+            result.pop("_api_base_used", None)
+            return result
 
         self._stat_increment("info_cache_miss")
         attempted: List[str] = []
@@ -1394,6 +1399,7 @@ class AltoProcessor:
                                 merged[key] = structure_data.get(key)
 
                     merged.setdefault("pid", pid)
+                    merged["_api_base_used"] = base
                     # Propagate parent PID as root_pid to help locate book context
                     parents = merged.get("parents") or {}
                     own_parent = parents.get("own") or {}
@@ -1407,7 +1413,9 @@ class AltoProcessor:
                     self._remember_successful_base(base)
                     if isinstance(merged, dict):
                         self._cache_item(raw_uuid, merged)
-                        return merged
+                        cleaned = dict(merged)
+                        cleaned.pop("_api_base_used", None)
+                        return cleaned
                     return {}
 
                 self._stat_increment("info_k5")
@@ -1415,10 +1423,14 @@ class AltoProcessor:
                 response = self.session.get(url, timeout=API_TIMEOUT)
                 response.raise_for_status()
                 data = response.json()
+                if isinstance(data, dict):
+                    data["_api_base_used"] = base
                 self._remember_successful_base(base)
                 if isinstance(data, dict):
                     self._cache_item(raw_uuid, data)
-                    return data
+                    cleaned = dict(data)
+                    cleaned.pop("_api_base_used", None)
+                    return cleaned
                 return {}
             except Exception as exc:
                 last_error = exc
@@ -1435,6 +1447,9 @@ class AltoProcessor:
 
         cached = self._get_cached_item(raw_uuid)
         if cached and isinstance(cached.get("children"), list):
+            base_used = cached.get("_api_base_used")
+            if isinstance(base_used, str) and base_used:
+                self._remember_successful_base(base_used)
             self._stat_increment("children_cache_hit")
             return cached["children"]
 
@@ -1480,6 +1495,7 @@ class AltoProcessor:
                     existing = self._get_cached_item(raw_uuid) or {}
                     merged = dict(existing)
                     merged["children"] = normalized
+                    merged["_api_base_used"] = base
                     self._cache_item(raw_uuid, merged)
                     self._remember_successful_base(base)
                     return normalized
@@ -1489,8 +1505,14 @@ class AltoProcessor:
                 response = self.session.get(url, timeout=CHILDREN_TIMEOUT)
                 response.raise_for_status()
                 data = response.json()
+                normalized_children = data if isinstance(data, list) else []
+                existing_children = self._get_cached_item(raw_uuid) or {}
+                merged_children = dict(existing_children)
+                merged_children["children"] = normalized_children
+                merged_children["_api_base_used"] = base
+                self._cache_item(raw_uuid, merged_children)
                 self._remember_successful_base(base)
-                return data if isinstance(data, list) else []
+                return normalized_children
             except Exception as exc:
                 last_error = exc
                 continue
