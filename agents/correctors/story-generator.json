@@ -1,0 +1,28 @@
+{
+  "name": "story-generator",
+  "display_name": "story-generator",
+  "prompt": "ignoruj vstupni text a vrat mi neformatovany nahodny kratky pribeh.",
+  "temperature": 0.2,
+  "top_p": 1.0,
+  "model": "openrouter/google/gemini-2.5-flash",
+  "reasoning_effort": "",
+  "settings": {
+    "defaults": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "reasoning_effort": "low"
+    },
+    "per_model": {
+      "openrouter/openai/gpt-4.1-mini": {
+        "temperature": 0.2,
+        "top_p": 1.0
+      },
+      "openrouter/google/gemini-2.5-flash": {
+        "temperature": 0.2,
+        "top_p": 1.0
+      }
+    }
+  },
+  "collection": "correctors",
+  "updated_at": 1765894733.414264
+}

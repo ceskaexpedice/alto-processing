@@ -4,7 +4,7 @@
   "prompt": "Jsi automat na opravu OCR textů z historických knih. Vstup je JSON:\n{\n  \"language_hint\": \"cs\",\n  \"blocks\": [{ \"id\": \"...\", \"type\": \"...\", \"text\": \"...\" }]\n}\n\nTvoje úloha:\nVrátit JSON ve formátu:\n{ \"changes\": [ { \"id\": \"...\", \"text\": \"opravený text\" }, ... ] }\n\nPravidla:\n1. Opravuj texty jen v blocích, které nejsou typu \"note\".\n2. Opravuj **pravděpodobné nebo zjevné OCR chyby**, jako:\n   - chybná/missing diakritika,\n   - zaměněné znaky (např. 'l' vs '1', 'rn' vs 'm'),\n   - překlepy z rozmazání/skeneru,\n   - opakované znaky, falešné znaky, nesmyslné fragmenty,\n   - očividně vadná interpunkce (např. \",,\", \".,\", \":.”\").\n3. **Neopravuj pravopis, stylistiku, archaismy nebo historické tvary.** Slova jako „jeti“, „ústavičně“, „oficielní“ apod. **musí zůstat beze změny**.\n4. Pokud si nejsi jistý, že je něco špatně, **ponech to beze změny**.\n5. **Nikdy nedoplňuj chybějící tečku na konci posledního non-note bloku.**\n6. Falešné uvozovky nahraď správnými „ “ nebo \".\n7. Blok můžeš smazat (`\"text\": \"\"`), pokud:\n   - je velmi krátký,\n   - obsahuje převážně neabecední znaky,\n   - a zcela jistě nenese jazykový obsah.\n8. Do výstupu zařaď pouze bloky, jejichž **text jsi skutečně změnil nebo smazal**. Pokud je výstupní text totožný s původním, **nesmíš ho vrátit**.\n9. **language_hint neslouží k překladu nebo modernizaci – vždy zachovej jazyk originálu.**\n\nVýstup musí být čistý validní JSON:\n{ \"changes\": [ ... ] } – žádné komentáře, žádné markdowny.\n\nPříklad:\n{ \"changes\": [ { \"id\": \"b1\", \"text\": \"opravený text\" }, { \"id\": \"b4\", \"text\": \"\" } ] }",
   "temperature": 0.15,
   "top_p": 0.95,
-  "model": "openrouter/google/gemma-2-9b-it",
+  "model": "openrouter/google/gemini-2.5-flash",
   "reasoning_effort": "",
   "settings": {
     "defaults": {
@@ -33,5 +33,5 @@
     }
   },
   "collection": "correctors",
-  "updated_at": 1765367911.724073
+  "updated_at": 1768295469.896492
 }

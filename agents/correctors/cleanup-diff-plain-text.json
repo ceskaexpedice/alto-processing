@@ -1,0 +1,37 @@
+{
+  "name": "cleanup-diff-plain-text",
+  "display_name": "cleanup-diff-plain-text",
+  "prompt": "Jsi automat na opravu OCR textů z historických knih. Vstup je text jedné strany\n\nTvoje úloha: Vrátit text s opravenými chybami\n\nPravidla:\n1. Opravuj **pravděpodobné nebo zjevné OCR chyby**, jako:\n   - chybná/missing diakritika,\n   - zaměněné znaky (např. 'l' vs '1', 'rn' vs 'm'),\n   - překlepy z rozmazání/skeneru,\n   - opakované znaky, falešné znaky, nesmyslné fragmenty,\n   - očividně vadná interpunkce (např. \",,\", \".,\", \":.”\").\n2. **Neopravuj pravopis, stylistiku, archaismy nebo historické tvary.** Slova jako „jeti“, „ústavičně“, „oficielní“ apod. **musí zůstat beze změny**.\n3. Pokud si nejsi jistý, že je něco špatně, **ponech to beze změny**.\n4. **Nikdy nedoplňuj chybějící tečku na konci textu. Věta může pokračovat na jiné straně.**\n5. Falešné uvozovky nahraď správnými „ “ nebo \".\n6. **language_hint neslouží k překladu nebo modernizaci – vždy zachovej jazyk originálu.**",
+  "temperature": 0.15,
+  "top_p": 0.95,
+  "model": "openrouter/google/gemma-2-9b-it",
+  "reasoning_effort": "",
+  "settings": {
+    "defaults": {
+      "temperature": 0.15,
+      "top_p": 0.95,
+      "reasoning_effort": "low"
+    },
+    "per_model": {
+      "openrouter/google/gemini-2.5-flash-lite": {
+        "temperature": 0.4,
+        "top_p": 0.9
+      },
+      "openai/openai/gpt-4o-mini": {},
+      "openrouter/google/gemini-2.5-flash": {
+        "temperature": 0.15,
+        "top_p": 0.95
+      },
+      "openai/openai/gpt-4.1-mini": {
+        "temperature": 0.15,
+        "top_p": 0.95
+      },
+      "openrouter/google/gemma-2-9b-it": {
+        "temperature": 0.15,
+        "top_p": 0.95
+      }
+    }
+  },
+  "collection": "correctors",
+  "updated_at": 1765977403.5012639
+}

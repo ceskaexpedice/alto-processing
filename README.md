@@ -1,159 +1,140 @@
-# Alto Processing Web Service
+# Alto Processing
 
-FastAPI aplikace s UI (šablona `app/templates/compare.html`) a REST endpointy `/process`, `/preview`, `/diff`, `/agents/*`, `/exports/*`. Umí algoritmický převod ALTO, LLM korekce, OCR, export do TXT/HTML/MD/EPUB včetně ilustrací (K5 manuální ořez, K7 IIIF). Běží jako jeden proces; UI komunikuje přes REST.
+Alto Processing je open source prostředí pro experimenty a porovnávání různých přístupů ke zpracování historických dokumentů, jejich ALTO XML, textu a skenů stránek. Umožňuje na jednom místě zkoušet různé technologie, srovnávat jejich výsledky a průběžně ověřovat, co v praxi funguje lépe.
 
-## Co potřebujete
-- Python 3.10+
-- Node.js + npm (jen kvůli legacy TypeScript bundlu `dist/run_original.js`)
-- Docker + Docker Compose plugin (pro kontejnerové spuštění)
+Projekt dnes kombinuje především algoritmické zpracování ALTO, LLM korekce, OCR experimenty a export výsledků do formátů `txt`, `html`, `md` a `epub`. Součástí je i webové rozhraní, které pomáhá jednotlivé varianty a jejich kombinace přehledně porovnávat nad konkrétní knihou nebo stránkou a usnadňuje kontrolu kvality výstupu.
 
-## Rychlý start lokálně (bez Dockeru)
-1) `cp .env.example .env` a doplňte API klíče (OpenRouter/OpenAI) + další proměnné.  
-2) Virtuální env a závislosti:
+## Implementované funkce
+
+- porovnávání algoritmických technologií pro převod ALTO do čitelného formátovaného textu
+- experimenty s LLM korekcemi zpracovaného formátovaného textu
+- testování kvality nových OCR modelů s porovnáním s dosavadním přístupem
+- způsoby napojování jednotlivých stránek za sebe do jednolitého textu
+- custom využití LMM modelů pro práci s textem
+- rychlé ověřování kvality nad konkrétní knihou nebo stránkou z Krameria MZK
+- export všech výsledků do běžně použitelných formátů včetně `epub`
+
+## Použití nasazené instance
+
+Tato instance je nasazená na adrese:
+
+`https://alto-processing.trinera.cloud/`
+
+Ověřený personál s přístupovým kódem ji může používat přes REST API. Server umožňuje spouštět různé kombinace kroků zpracování nad knihou nebo stránkou a výsledkem je exportní soubor připravený ke stažení.
+
+Typický postup má tři kroky. Nejprve se odešle požadavek na vytvoření exportu. Server okamžitě odpoví s přiřazeným `JOB_ID`, které je potřeba pro další kroky. 
+
+Ukázka pro export do `epub`:
+
 ```bash
-python3 -m venv .webenv
-source .webenv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-3) Node závislosti a případný rebuild TS (jen pro legacy `dist/run_original.js`):
-```bash
-npm install
-npx tsc   # jen pokud potřebuješ přebuildit dist/run_original.js
-```
-4) Spuštění:
-```bash
-./start.sh  # respektuje HOST, PORT, WEB_CONCURRENCY, LOG_LEVEL
-# nebo:
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8080 --app-dir .
-```
-Otevři http://localhost:8080. `/healthz` vrací `{"status": "ok", "environment": "<ALTO_WEB_ENVIRONMENT>"}`.
+TOKEN="AUTH_TOKEN"
+BASE="https://alto-processing.trinera.cloud"
 
-## Docker / Compose
-- Build a run:
-```bash
-docker build -t alto-web .
-docker run --rm -p 8080:8080 --env-file .env alto-web
-```
-- Compose ( pohodlnější, bez port mappingu v defaultu ):
-```bash
-cp .env.example .env
-docker compose up --build -d
-```
-Kontejner mapuje `./agents` a `./config` jako bind mounty. Port 8080 je dostupný jen v síti Compose; do světa ho publikuje Nginx v override (viz níže).
-
-## Produkce: Nginx reverse proxy + Let’s Encrypt
-Repo má připravené `deploy/docker-compose.override.yml` (služba `nginx`) a `deploy/nginx.conf`.
-
-1) Certy Let’s Encrypt na hostu (certbot webroot):
-```bash
-sudo mkdir -p /var/www/certbot/.well-known/acme-challenge
-sudo certbot certonly --webroot -w /var/www/certbot \
-  -d alto-processing.trinera.cloud --agree-tos -m tvuj@email.cz --non-interactive
-```
-2) Spuštění s proxy:
-```bash
-docker compose -f docker-compose.yml -f deploy/docker-compose.override.yml up --build -d
-```
-Nginx vystaví 80/443, předává na `alto-web:8080`, posílá hlavičky Host/X-Forwarded-For/Proto, přesměrovává HTTP→HTTPS, HSTS je zapnuté.
-3) Ověření: `https://alto-processing.trinera.cloud/healthz` (200), `curl -I http://.../healthz` (301 na https).
-4) Obnova certů (cron pro root, 3:00 denně):
-```
-0 3 * * * certbot renew --webroot -w /var/www/certbot --post-hook "docker compose -f /root/alto_processing/docker-compose.yml -f /root/alto_processing/deploy/docker-compose.override.yml exec nginx nginx -s reload"
-```
-
-Volitelně můžete přidat pravidelný restart aplikačního kontejneru (např. denně kvůli úklidu dočasných exportů):
-```
-0 4 * * * docker compose -f /root/alto_processing/docker-compose.yml -f /root/alto_processing/deploy/docker-compose.override.yml restart alto-web
-```
-
-## Struktura
-- `app/` FastAPI (`app/main.py`), šablony `app/templates/compare.html`, logika v `app/core/`
-- `static/` statická aktiva UI
-- `agents/`, `config/` runtime data (bind mount v Compose)
-- `dist/` bundlovaný legacy JS `run_original.js` (build přes `npx tsc`)
-- `start.sh` wrapper nad uvicorn (čte HOST, PORT, WEB_CONCURRENCY, LOG_LEVEL)
-
-## API / UI
-- UI na `/`, REST `/process`, `/preview`, `/diff`, `/agents/*`, `/exports/*`.
-- `/healthz` pro monitoring.
-- Token v hlavičce `Authorization: Bearer <ALTO_WEB_AUTH_TOKEN>` (healthz je veřejné, chráněné endpointy vrací 303/401 bez tokenu).
-- Lokální testování: BASE typicky `http://127.0.0.1:8080` (bez `/auth`). `/auth` je jen HTML login pro cookie.
-
-### Download přes API
-`POST /download` → vrátí `job_id`. Stav zjistíte přes `GET /exports/{job_id}` (obsahuje `state`, `progress.percent`, `progress.eta_seconds`) a výsledek stáhnete z `GET /exports/{job_id}/download`.
-
-Podporované pole requestu:
-- `uuid` (povinné) – UUID knihy nebo stránky.
-- `format` – `txt` (default) | `html` | `md` | `epub`.
-- `range` – `all` / `book` / `*` nebo např. `"7-11,23"`; při UUID stránky a bez `range` se použije jen daná stránka.
-- `llmAgent` – např. `{ "name": "cleanup-diff-generated-mid" }` (přepne source na LLM).
-- `dropSmall` – odfiltruje malé bloky (mapuje se na `omit_small_text`).
-- `ignoreImages` – u EPUB potlačí obrázky (pro OCR se ignorují vždy).
-- `languageHint` – jazykový hint pro agenty, default `cs`.
-- `apiBase` – volitelná Kramerius API URL; přebije autodetekci.
-- `authors`, `coverUuid`, `outputName` – volitelná metadata (cover se jinak vybere automaticky z prioritních stránek).
-
-Příklad (produkce, BASE míří na `/auth`):
-```bash
-TOKEN="..."; BASE="https://alto-processing.trinera.cloud/auth"
-curl -X POST "$BASE/download" \
+curl -sS -X POST "$BASE/download" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "uuid": "49c6424a-c820-4224-9475-4aa0d8a9d844",
+    "uuid": "uuid:06c8fc5a-eaa6-4d2b-88bf-493221045e5f",
     "format": "epub",
     "range": "all",
-    "dropSmall": true,
     "ignoreImages": false,
     "languageHint": "cs",
-    "outputName": "output.epub"
+    "outputName": "book.epub"
   }'
 ```
-Polling (stav + procenta + ETA) a stažení:
+
+Kontrola stavu jobu:
+
 ```bash
-curl -H "Authorization: Bearer $TOKEN" "$BASE/exports/<job_id>"
-curl -H "Authorization: Bearer $TOKEN" -o output.txt "$BASE/exports/<job_id>/download"
-```
-Ukázka odpovědi stavu:
-```json
-{
-  "job_id": "abc123",
-  "state": "running",
-  "progress": {
-    "processed": 3,
-    "total": 10,
-    "message": "Zpracovávám stránku 3/10",
-    "percent": 30.0,
-    "eta_seconds": 42.5
-  },
-  "error": null,
-  "download_url": null,
-  "filename": null
-}
+curl -sS "$BASE/exports/JOB_ID" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-### CLI helper
-`cli/download.py` dělá totéž; token z `--token` nebo `ALTO_TOKEN`.
-```bash
-ALTO_TOKEN=TVŮJ_TOKEN python cli/download.py \
-  --url http://localhost:8080 \
-  --uuid 49c6424a-c820-4224-9475-4aa0d8a9d844 \
-  --format epub \
-  --range "7-11,23" \
-  --llm-agent '{"name":"cleanup-diff-generated-mid"}' \
-  --api-base https://kramerius5.nkp.cz/search/api/v5.0 \
-  --drop-small \
-  --ignore-images \
-  --language-hint cs \
-  --output output.epub
-```
-CLI přepínače: `--ignore-images`, `--api-base`, `--language-hint`, `--output-name` (jinak se bere z `--output`), `--drop-small`, `--llm-agent`.
+Stažení hotového výsledku:
 
-## Poznámky
-- Node.js je jen kvůli legacy TypeScriptu; pokud bundl nebude potřeba, lze NPM kroky z Dockerfile odstranit.
-- `WEB_CONCURRENCY` ve `start.sh` nastav na počet CPU jader.
-- Exportní joby ukládají do dočasných souborů; při restartu zmizí. Bind mounty `agents/` a `config/` si drž ve storage.
-- Server musí mít odchozí HTTPS k API Krameria (včetně K7/IIIF) a OpenRouter/OpenAI; jinak zpracování padne.
-- Ilustrace: ALTO se převádí na `<note class="illustration" data-bbox=... data-page-width=...>`; EPUB může stáhnout obrázky (K7 přes IIIF, K5 ořez).
-- Podporovaní provider filtrování a modely v UI (OpenRouter/CERIT), vlastní LLM úpravy (custom agent), manual-joiner pro napojování stran.
+```bash
+curl -sS "$BASE/exports/JOB_ID/download" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o book.epub
+```
+
+Podrobnější popis parametrů, dalších exportních voleb a celého API workflow je [zde](https://github.com/REPO_OWNER/REPO_NAME/wiki/API-Guide).
+
+## Webové rozhraní
+
+Webové rozhraní slouží k vyzkoušení, porovnávání a úpravám jednotlivých kroků zpracování. Umožňuje testovat účinnost různých přístupů, měnit konfiguraci modelů a agentů, ladit prompty nebo úroveň `reasoning` a průběžně sledovat, jak se tyto změny projeví na výsledku.
+
+Rozhraní je rozdělené do tří hlavních částí.
+
+![Alto Processing UI](docs/images/ui-overview.png)
+
+- `1` Hlavní panel s jednotlivými funkčními bloky
+- `2` navigace stránek knihy
+- `3` náhled aktuální stránky
+
+
+Hlavní panel je rozdělený do několika funkčních bloků. Jednotlivé bloky lze skrývat a znovu zobrazovat ikonou oka (1). U vybraných operací je možné zapnout automatický režim, který automaticky provede úpravu pro každou další stranu (2). Ignorování formátu textu (3) posílá ke zpracování čistý text.
+Nastavení umožňuje otevřít podrobné nastavení agenta (4) a volba `Uložit` umožní stažení s využitím vybrané úpravy (5). Podrobnější vysvětlení ovládání jednotlivých kroků je [zde](https://github.com/REPO_OWNER/REPO_NAME/wiki/User-Guide).
+
+![Alto Processing UI](docs/images/block-settings.png)
+
+### Jednotlivé bloky:
+
+- Vstupní blok slouží pro zadání `UUID` knihy/strany a adresy Krameria API.
+- Informační bloky zobrazují metadata o stránce a celé knize, včetně odkazu do digitální knihovny a přístupu k raw ALTO.
+- Blok `Algoritmický přístup` porovnává dosavadní a novější algoritmický převod existujícího ALTO do formátovaného textu.
+- `Oprava zpracovaného textu pomocí LLM` navazuje na nově zpracované ALTO. Používá uloženého agenta, tedy prompt, model a jeho další nastavení pro opravu šumu a chyb při tvoření ALTO.
+- Blok `OCR` spouští vybrané OCR modely přímo nad obrazem stránky a převádí výsledek do formátovaného textu.
+- Dva bloky `Porovnání` slouží k přímému srovnání jednotlivých přístupů proti OCR pomocí diffu nad výsledky.
+- Blok pro napojování stran rozhoduje, zda se mají sousední strany oddělit, spojit nebo sloučit. Výsledek vrací hodnoty `0` pro `split`, `1` pro `join` a `2` pro `merge`.
+- Poslední blok umožňuje vlastní využití `LLM` nad textem stránky, například pro shrnutí jednotlivých odstavců, simulaci `NER` nebo další experimentální transformace.
+
+
+## Lokální spuštění
+
+Lokální spuštění zpřístupňuje stejné webové rozhraní i API jako nasazená instance, ale ve vlastním prostředí. Pro plnou funkčnost je potřeba připravit správný `.env` soubor a doplnit do něj používané tokeny.
+
+### Tokeny a `.env`
+
+```bash
+cp .env.example .env
+```
+V souboru `.env` je potřeba nastavit především:
+
+- `ALTO_WEB_AUTH_TOKEN` pro autentizaci při přístupu do aplikace
+- `OPENAI_API_KEY`, pokud mají být používány modely OpenAI
+- `OPENROUTER_API_KEY`, pokud mají být používány modely přes OpenRouter
+- `CERIT_API_KEY`, pokud mají být používány modely CERIT
+
+### Závislosti
+- Python 3.10+
+- Node.js + npm
+- Docker a Docker Compose pro kontejnerové spuštění
+
+### Ruční spuštění
+
+Ruční spuštění je vhodné pro lokální vývoj, ladění a přímou práci s prostředím projektu.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install --upgrade pip
+pip install -r requirements.txt
+npm install
+./start.sh
+```
+
+Aplikace je po spuštění dostupná na:
+
+`http://localhost:8080/`
+
+### Kontejnerové spuštění
+
+Kontejnerové spuštění je vhodné ve chvíli, kdy má aplikace běžet v izolovaném prostředí bez ruční instalace závislostí do systému.
+
+```bash
+docker compose up --build
+```
+
+Podrobnější technický setup, konfigurace providerů a deployment je [zde](https://github.com/REPO_OWNER/REPO_NAME/wiki/Running-Locally).
