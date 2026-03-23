@@ -2,9 +2,9 @@
 
 Alto Processing je open source prostředí pro experimenty a porovnávání různých přístupů ke zpracování historických dokumentů, jejich ALTO XML, textu a skenů stránek. Umožňuje na jednom místě zkoušet různé technologie, srovnávat jejich výsledky a průběžně ověřovat, co v praxi funguje lépe.
 
-Projekt dnes kombinuje především algoritmické zpracování ALTO, LLM korekce, OCR experimenty a export výsledků do formátů `txt`, `html`, `md` a `epub`. Součástí je i webové rozhraní, které pomáhá jednotlivé varianty a jejich kombinace přehledně porovnávat nad konkrétní knihou nebo stránkou a usnadňuje kontrolu kvality výstupu.
+Projekt dnes kombinuje především algoritmické zpracování ALTO, LLM práci s textem, OCR experimenty a export výsledků do formátů `txt`, `html`, `md` a `epub`. Součástí je i webové rozhraní, které pomáhá jednotlivé varianty a jejich kombinace přehledně porovnávat nad konkrétní knihou nebo stránkou a usnadňuje kontrolu kvality výstupu.
 
-## Implementované funkce
+## Co aplikace umožňuje
 
 - porovnávání algoritmických technologií pro převod ALTO do čitelného formátovaného textu
 - experimenty s LLM korekcemi zpracovaného formátovaného textu
@@ -69,8 +69,8 @@ Rozhraní je rozdělené do tří hlavních částí.
 ![Alto Processing UI](docs/images/ui-overview.png)
 
 - `1` Hlavní panel s jednotlivými funkčními bloky
-- `2` navigace stránek knihy
-- `3` náhled aktuální stránky
+- `2` Levý panel s navigací mezi stránkami knihy
+- `3` Pravý panel s náhledem aktuálně vybrané stránky
 
 
 Hlavní panel je rozdělený do několika funkčních bloků. Jednotlivé bloky lze skrývat a znovu zobrazovat ikonou oka (1). U vybraných operací je možné zapnout automatický režim, který automaticky provede úpravu pro každou další stranu (2). Ignorování formátu textu (3) posílá ke zpracování čistý text.
