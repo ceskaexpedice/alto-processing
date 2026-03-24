@@ -58,7 +58,7 @@ curl -sS "$BASE/exports/JOB_ID/download" \
   -o book.epub
 ```
 
-Podrobnější popis parametrů, dalších exportních voleb a celého API workflow je [zde](https://github.com/REPO_OWNER/REPO_NAME/wiki/API-Guide).
+Podrobnější popis parametrů, dalších exportních voleb a celého API workflow je [zde](https://github.com/ceskaexpedice/alto-processing/wiki/API-Guide).
 
 ## Webové rozhraní
 
@@ -74,7 +74,7 @@ Rozhraní je rozdělené do tří hlavních částí.
 
 
 Hlavní panel je rozdělený do několika funkčních bloků. Jednotlivé bloky lze skrývat a znovu zobrazovat ikonou oka (1). U vybraných operací je možné zapnout automatický režim, který automaticky provede úpravu pro každou další stranu (2). Ignorování formátu textu (3) posílá ke zpracování čistý text.
-Nastavení umožňuje otevřít podrobné nastavení agenta (4) a volba `Uložit` umožní stažení s využitím vybrané úpravy (5). Podrobnější vysvětlení ovládání jednotlivých kroků je [zde](https://github.com/REPO_OWNER/REPO_NAME/wiki/User-Guide).
+Nastavení umožňuje otevřít podrobné nastavení agenta (4) a volba `Uložit` umožní stažení s využitím vybrané úpravy (5). Podrobnější vysvětlení ovládání jednotlivých kroků je [zde](https://github.com/ceskaexpedice/alto-processing/wiki/User-Guide).
 
 ![Alto Processing UI](docs/images/block-settings.png)
 
@@ -137,4 +137,4 @@ Kontejnerové spuštění je vhodné ve chvíli, kdy má aplikace běžet v izol
 docker compose up --build
 ```
 
-Podrobnější technický setup, konfigurace providerů a deployment je [zde](https://github.com/REPO_OWNER/REPO_NAME/wiki/Running-Locally).
+Podrobnější technický setup, konfigurace providerů a deployment je [zde](https://github.com/ceskaexpedice/alto-processing/wiki/Running-My-Instance).
