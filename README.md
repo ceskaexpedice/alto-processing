@@ -58,6 +58,25 @@ curl -sS "$BASE/exports/JOB_ID/download" \
   -o book.epub
 ```
 
+### Použití s různými Krameria instancemi
+
+Systém podporuje různé Krameria instance (např. MZK, NKP, K7 Trinera). Pro instance používající API verzi 7.0 (K7) je potřeba uvést parametr `apiBase` s plnou cestou k API endpointu. Systém automaticky normalizuje URL (odstraňuje duplicitní `/`).
+
+Příklad pro export z K7 Trinera:
+
+```bash
+curl -sS -X POST "$BASE/download" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "uuid": "1f844c3d-9b0a-4970-bbf1-8d20e1bc7ded",
+    "format": "epub",
+    "range": "all",
+    "apiBase": "https://kramerius.k7.trinera.cloud/search/api/client/v7.0",
+    "dropSmall": true
+  }'
+```
+
 Podrobnější popis parametrů, dalších exportních voleb a celého API workflow je [zde](https://github.com/ceskaexpedice/alto-processing/wiki/API-Guide).
 
 ## Webové rozhraní

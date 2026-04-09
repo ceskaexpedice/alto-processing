@@ -175,6 +175,9 @@ class AltoProcessor:
         if not value:
             return None
         normalized = value.rstrip('/')
+        # Defenzivně doplnit /api/client/v7.0 pro Krameria instance končící na /search
+        if '/api/' not in normalized and normalized.endswith('/search'):
+            normalized += '/api/client/v7.0'
         return normalized or None
 
     def _get_cached_item(self, pid: str) -> Optional[Dict[str, Any]]:
