@@ -60,7 +60,7 @@ curl -sS "$BASE/exports/JOB_ID/download" \
 
 ### Použití s různými Krameria instancemi
 
-Systém podporuje různé Krameria instance (např. MZK, NKP, K7 Trinera). Pro instance používající API verzi 7.0 (K7) je potřeba uvést parametr `apiBase` s plnou cestou k API endpointu. Systém automaticky normalizuje URL (odstraňuje duplicitní `/`).
+Systém podporuje různé Krameria instance (např. MZK, NKP, atd.). Pro instance používající API verzi 7.0 (K7) je potřeba uvést parametr `apiBase` s plnou cestou k API endpointu. 
 
 Příklad pro export z K7 Trinera:
 

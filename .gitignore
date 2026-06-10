@@ -7,3 +7,5 @@ dist/
 .DS_Store
 TODO.md
 ALTO_PROCESSING_WIKI_NOTES.txt
+wiki/
+.venv
