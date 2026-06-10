@@ -67,17 +67,17 @@ KNOWN_LIBRARY_OVERRIDES: Dict[str, Dict[str, str]] = {
     "https://api.kramerius.mzk.cz/search/api/client/v7.0": {
         "code": "mzk",
         "label": "Moravská zemská knihovna v Brně",
-        "handle_base": "https://kramerius.mzk.cz/search",
+        "handle_base": "https://www.digitalniknihovna.cz/mzk",
     },
     "https://kramerius.mzk.cz/search/api/v5.0": {
         "code": "mzk",
         "label": "Moravská zemská knihovna v Brně",
-        "handle_base": "https://kramerius.mzk.cz/search",
+        "handle_base": "https://www.digitalniknihovna.cz/mzk",
     },
     "https://kramerius5.nkp.cz/search/api/v5.0": {
         "code": "nkp",
         "label": "Národní knihovna České republiky",
-        "handle_base": "https://kramerius5.nkp.cz/search",
+        "handle_base": "https://www.digitalniknihovna.cz/nkp",
     },
 }
 

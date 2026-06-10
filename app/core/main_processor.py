@@ -90,8 +90,6 @@ PAGES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
 DEFAULT_API_BASES: List[str] = [
     "https://api.kramerius.mzk.cz/search/api/client/v7.0",
-    "https://kramerius.mzk.cz/search/api/v5.0",
-    "https://kramerius5.nkp.cz/search/api/v5.0",
 ]
 
 # Map API base -> IIIF library code (used for IIIF Presentation manifests)
@@ -1723,6 +1721,54 @@ class AltoProcessor:
             "model": child.get('model'),
             "policy": child.get('policy'),
         }
+
+    def _search_metadata_for_pids(self, pids: List[str], api_base_override: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        cleaned_pids = []
+        seen: set[str] = set()
+        for pid in pids or []:
+            normalized = (pid or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            cleaned_pids.append(normalized)
+
+        if not cleaned_pids:
+            return {}
+
+        for base in self._iter_api_bases(api_base_override):
+            version = self._detect_api_version(base)
+            if version != "k7":
+                continue
+            try:
+                query = " OR ".join(f'pid:"{pid}"' for pid in cleaned_pids)
+                url = (
+                    f"{base}/search"
+                    f"?q={requests.utils.quote(query)}"
+                    f"&rows={len(cleaned_pids)}"
+                    "&fl=pid,model,title.search,root.title,part.number.str,date.str,date.min,date.max,title"
+                    "&wt=json"
+                )
+                response = self.session.get(url, timeout=API_TIMEOUT)
+                response.raise_for_status()
+                data = response.json()
+                docs = (data.get("response") or {}).get("docs") if isinstance(data, dict) else []
+                if not isinstance(docs, list):
+                    return {}
+
+                metadata_by_pid: Dict[str, Dict[str, Any]] = {}
+                for doc in docs:
+                    if not isinstance(doc, dict):
+                        continue
+                    pid = self._strip_uuid_prefix(doc.get("pid"))
+                    if pid:
+                        metadata_by_pid[pid] = doc
+                if metadata_by_pid:
+                    self._remember_successful_base(base)
+                return metadata_by_pid
+            except Exception:
+                continue
+
+        return {}
     
     def _pick_book_uuid_from_context(self, item_data: Dict[str, Any]) -> Optional[str]:
         """Z kontextové cesty vybere nejbližší 'knižní' předek.
@@ -1770,19 +1816,39 @@ class AltoProcessor:
             visited.add(node_uuid)
 
             children = self.get_children(node_uuid)
+            page_children = [child for child in children if isinstance(child, dict) and (child.get("model") == "page" or child.get("model") is None)]
+            page_metadata = self._search_metadata_for_pids(
+                [child.get("pid") for child in page_children if isinstance(child, dict)],
+            )
             for child in children:
                 child_uuid = self._strip_uuid_prefix(child.get('pid'))
                 if not child_uuid:
                     continue
                 model = child.get('model')
                 if model == 'page' or model is None:
+                    search_doc = page_metadata.get(child_uuid) or {}
                     summary = self._page_summary_from_child(child, len(pages))
                     original_page_number = summary.get("pageNumber")
-                    page_number = summary.get("pageNumber")
                     title_text = summary.get("title")
+                    page_number = summary.get("pageNumber")
                     page_side = summary.get("pageSide")
 
-                    # Nejprve zkusit /info (typicky title = číslo strany)
+                    if isinstance(search_doc, dict) and search_doc:
+                        search_title = self._clean_text(search_doc.get("title.search"))
+                        root_title = self._clean_text(search_doc.get("root.title"))
+                        part_number = self._clean_text(search_doc.get("part.number.str"))
+                        date_str = self._clean_text(search_doc.get("date.str"))
+                        if search_title:
+                            page_number = page_number or search_title
+                            if not title_text:
+                                title_text = search_title
+                        if root_title and not title_text:
+                            title_text = root_title
+                        if part_number and not page_number:
+                            page_number = part_number
+                        if date_str and not title_text:
+                            title_text = date_str
+
                     if not page_number or not title_text or not page_side:
                         page_info = self.get_item_json(child_uuid)
                         if page_info:
@@ -1810,7 +1876,6 @@ class AltoProcessor:
                             enriched["details"] = details
                             self._cache_item(child_uuid, enriched)
 
-                    # Pokud stále chybí číslo nebo strana, zkusíme MODS stránky
                     if not page_number or not title_text or not page_side:
                         mods = self.get_mods_metadata(child_uuid)
                         if mods:
