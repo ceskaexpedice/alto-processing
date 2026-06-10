@@ -1097,6 +1097,16 @@ def describe_library(api_base: Optional[str]) -> Dict[str, str]:
         'version': version,
     }
 
+
+def build_library_view_url(handle_base: str, book_uuid: Optional[str], page_uuid: Optional[str] = None) -> str:
+    base = (handle_base or '').rstrip('/')
+    if not base or not book_uuid:
+        return ''
+    view_url = f"{base}/view/uuid:{book_uuid}"
+    if page_uuid:
+        view_url += f"?page=uuid:{page_uuid}"
+    return view_url
+
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -9744,8 +9754,8 @@ class ComparisonHandler(http.server.BaseHTTPRequestHandler):
 
                 page_summary = context.get('page') or {}
                 page_item = context.get('page_item') or {}
-                book_handle = f"{handle_base}/handle/uuid:{book_uuid}" if handle_base and book_uuid else ''
-                page_handle = f"{handle_base}/handle/uuid:{page_uuid}" if handle_base and page_uuid else ''
+                book_handle = build_library_view_url(handle_base, book_uuid)
+                page_handle = build_library_view_url(handle_base, book_uuid, page_uuid)
 
                 page_info = {
                     'uuid': page_uuid,

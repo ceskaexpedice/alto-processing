@@ -14,6 +14,7 @@ from ..core.agent_runner import AgentRunnerError, run_agent as run_agent_via_res
 from ..core.comparison_legacy import (
     DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
+    build_library_view_url,
     build_agent_diff,
     build_html_diff,
     delete_agent_file,
@@ -246,8 +247,8 @@ def process_page(uuid: str = Query(...), api_base: Optional[str] = Query(None)) 
 
         page_summary = context.get("page") or {}
         page_item = context.get("page_item") or {}
-        book_handle = f"{handle_base}/handle/uuid:{book_uuid}" if handle_base and book_uuid else ""
-        page_handle = f"{handle_base}/handle/uuid:{page_uuid}" if handle_base and page_uuid else ""
+        book_handle = build_library_view_url(handle_base, book_uuid)
+        page_handle = build_library_view_url(handle_base, book_uuid, page_uuid)
         details = page_item.get("details") or {}
 
         page_info = {
