@@ -117,7 +117,7 @@ class AltoProcessor:
         api_base_url: Optional[str] = None,
         fallback_api_bases: Optional[List[str]] = None,
     ):
-        primary_iiif = iiif_base_url or "https://kramerius.mzk.cz/search/iiif"
+        primary_iiif = iiif_base_url or "https://api.kramerius.mzk.cz/search/iiif"
         self.iiif_base_url = primary_iiif.rstrip('/')
 
         base_candidates: List[str] = []
@@ -343,6 +343,20 @@ class AltoProcessor:
         api_part = f"&api_base={requests.utils.quote(base)}" if base else ""
         return f"/preview?uuid={requests.utils.quote(uuid)}&stream={stream}{api_part}"
 
+    def _get_iiif_base_for_api(self, base: Optional[str]) -> str:
+        normalized = self._normalize_api_base(base or "") or ""
+        if not normalized:
+            return self.iiif_base_url
+        if "api.kramerius.mzk.cz/search/api/client/v7.0" in normalized:
+            return "https://api.kramerius.mzk.cz/search/iiif"
+        if "kramerius.mzk.cz/search/api/v5.0" in normalized:
+            return "https://api.kramerius.mzk.cz/search/iiif"
+        if "kramerius5.nkp.cz/search/api/v5.0" in normalized:
+            return "https://kramerius5.nkp.cz/search/iiif"
+        if normalized.endswith("/search"):
+            return normalized.rstrip("/") + "/iiif"
+        return self.iiif_base_url
+
     def _pages_from_manifest(self, book_uuid: str, library_code: str) -> List[Dict[str, Any]]:
         manifest_url = f"https://iiif.digitalniknihovna.cz/{library_code}/uuid:{book_uuid}"
         try:
@@ -399,7 +413,7 @@ class AltoProcessor:
                 "policy": None,
             }
             if thumb_url:
-                summary["thumbnail"] = self._build_preview_url(page_uuid_norm, "IMG_THUMB")
+                summary["thumbnail"] = f"{self._get_iiif_base_for_api(self.api_base_url)}/uuid:{page_uuid_norm}/full/!256,256/0/default.jpg"
             pages.append(summary)
         return pages
 
@@ -1828,78 +1842,29 @@ class AltoProcessor:
                 if model == 'page' or model is None:
                     search_doc = page_metadata.get(child_uuid) or {}
                     summary = self._page_summary_from_child(child, len(pages))
-                    original_page_number = summary.get("pageNumber")
-                    title_text = summary.get("title")
-                    page_number = summary.get("pageNumber")
-                    page_side = summary.get("pageSide")
+                    search_title = self._clean_text(search_doc.get("title.search")) if isinstance(search_doc, dict) else ""
+                    root_title = self._clean_text(search_doc.get("root.title")) if isinstance(search_doc, dict) else ""
+                    part_number = self._clean_text(search_doc.get("part.number.str")) if isinstance(search_doc, dict) else ""
+                    date_str = self._clean_text(search_doc.get("date.str")) if isinstance(search_doc, dict) else ""
 
-                    if isinstance(search_doc, dict) and search_doc:
-                        search_title = self._clean_text(search_doc.get("title.search"))
-                        root_title = self._clean_text(search_doc.get("root.title"))
-                        part_number = self._clean_text(search_doc.get("part.number.str"))
-                        date_str = self._clean_text(search_doc.get("date.str"))
-                        if search_title:
-                            page_number = page_number or search_title
-                            if not title_text:
-                                title_text = search_title
-                        if root_title and not title_text:
-                            title_text = root_title
-                        if part_number and not page_number:
-                            page_number = part_number
-                        if date_str and not title_text:
-                            title_text = date_str
+                    if search_title:
+                        summary["pageNumber"] = search_title
+                        if not summary.get("title"):
+                            summary["title"] = search_title
+                    elif part_number and not summary.get("pageNumber"):
+                        summary["pageNumber"] = part_number
 
-                    if not page_number or not title_text or not page_side:
-                        page_info = self.get_item_json(child_uuid)
-                        if page_info:
-                            info_title = self._clean_text(page_info.get('title'))
-                            info_number = self._clean_text((page_info.get('details') or {}).get('pagenumber'))
-                            if not info_number and info_title and (page_info.get('model') == 'page' or page_info.get('model') is None):
-                                info_number = info_title
-                            title_text = title_text or info_title
-                            page_number = page_number or info_number
-                            page_side = page_side or self._clean_text(
-                                (page_info.get('details') or {}).get('pageposition')
-                                or (page_info.get('details') or {}).get('pagePosition')
-                                or (page_info.get('details') or {}).get('pagerole')
-                            )
-                            if page_number and not original_page_number:
-                                self._stat_increment("page_number_from_page_info")
-                            enriched = dict(page_info)
-                            if title_text:
-                                enriched["title"] = title_text
-                            details = dict(enriched.get("details") or {})
-                            if page_number:
-                                details["pagenumber"] = page_number
-                            if page_side:
-                                details["pageposition"] = page_side
-                            enriched["details"] = details
-                            self._cache_item(child_uuid, enriched)
+                    if root_title and not summary.get("title"):
+                        summary["title"] = root_title
+                    elif date_str and not summary.get("title"):
+                        summary["title"] = date_str
 
-                    if not page_number or not title_text or not page_side:
-                        mods = self.get_mods_metadata(child_uuid)
-                        if mods:
-                            for entry in mods:
-                                label = (entry.get("label") or "").lower()
-                                value = self._clean_text(entry.get("value"))
-                                if not value:
-                                    continue
-                                if label in ("pagenumber", "page number", "pageindex", "page index") and not page_number:
-                                    page_number = value
-                                    self._stat_increment("page_number_from_page_mods")
-                                if label in ("název", "title") and not title_text:
-                                    title_text = value
-                                if label == "pageside" and not page_side:
-                                    page_side = value
-
-                    if page_number:
-                        summary["pageNumber"] = page_number
-                    else:
+                    if not summary.get("pageNumber"):
                         self._stat_increment("page_number_missing_child")
-                    if title_text:
-                        summary["title"] = title_text
-                    if page_side:
-                        summary["pageSide"] = page_side
+                        # Už nepokračujeme na /info ani MODS: tenhle path má být rychlý.
+                        # Když metadata chybí, necháme číslo stránky prázdné a pokračujeme.
+
+                    # pageSide necháváme prázdné, abychom nepadali do drahých fallbacků na každé stránce
                     pages.append(summary)
                 elif depth + 1 <= max_depth:
                     walk(child_uuid, depth + 1)

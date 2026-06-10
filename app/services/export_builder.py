@@ -95,14 +95,19 @@ class ExportBuilder:
         self.processor = AltoProcessor(api_base_url=self.params.api_base)
         self._debug_enabled = True
         self._epub_log_tag = "[EPUB_META]"
+        self._epub_illustration_total = 0
+        self._epub_illustration_done = 0
+        self._pages_total = 0
 
     def build(self) -> tuple[str, str]:
         pages = self._select_pages()
         if not pages:
             raise ValueError("Export neobsahuje žádné stránky.")
-        self.job.total_pages = len(pages)
+        self._pages_total = len(pages)
+        epub_total = max(1, self._pages_total * 2 + 1)
 
         page_contents: List[PageContent] = []
+        illustration_total = 0
         for idx, plan in enumerate(pages, start=1):
             self._check_abort()
             html = self._render_source_html(plan)
@@ -111,8 +116,8 @@ class ExportBuilder:
                 self._log_debug(f"Stránka {plan.uuid} byla přeskočena (žádný použitelný obsah).")
             else:
                 page_contents.append(content)
-            label = plan.page_number or f"Strana {plan.index + 1}"
-            self.job.update_progress(idx, len(pages), f"Zpracování {label} ({idx}/{len(pages)})")
+                illustration_total += sum(1 for snippet in content.snippets if snippet.tag == "note" and snippet.text and "Ilustrace" in snippet.text)
+            self._set_epub_progress(idx, 0, epub_total, f"Zpracování {plan.page_number or f'Strana {plan.index + 1}'}")
 
         if not page_contents:
             raise RuntimeError("Žádná ze stránek neobsahuje použitelná data pro export.")
@@ -120,7 +125,10 @@ class ExportBuilder:
         self._apply_joiner(page_contents)
         combined_html = self._compose_document(page_contents)
         if self.params.export_format == "epub":
+            self._epub_illustration_total = self._count_illustrations(combined_html)
+            self._set_epub_progress(self._pages_total, 0, epub_total, "Příprava EPUB")
             path = self._build_epub(combined_html)
+            self._set_epub_progress(epub_total, 0, epub_total, "EPUB dokončen")
             filename = self._build_filename()
             return path, filename
 
@@ -143,6 +151,15 @@ class ExportBuilder:
             print(f"[ExportDebug] {message}")
         except Exception:
             pass
+
+    def _count_illustrations(self, html_document: str) -> int:
+        soup = BeautifulSoup(html_document or "", "html.parser")
+        return sum(1 for note in soup.find_all("note") if self._is_illustration_note(note))
+
+    def _set_epub_progress(self, processed_pages: int, illustration_done: int, total: int, message: str) -> None:
+        processed = min(total, processed_pages + illustration_done)
+        self.job.total_pages = total
+        self.job.update_progress(processed, total, message)
 
     def _render_source_html(self, plan: PagePlan) -> str:
         source = self.params.source
@@ -797,48 +814,42 @@ class ExportBuilder:
     ) -> Optional[bytes]:
         if not page_uuid or not page_width or not page_height:
             return None
-        # Ověřit, že IIIF dává smysl (typicky k7)
+        # Použijeme pct region, abychom nemuseli tahat info.json kvůli rozměrům obrazu.
+        x_pct = max(0.0, min(100.0, (hpos / page_width) * 100.0))
+        y_pct = max(0.0, min(100.0, (vpos / page_height) * 100.0))
+        w_pct = max(0.01, min(100.0, (width / page_width) * 100.0))
+        h_pct = max(0.01, min(100.0, (height / page_height) * 100.0))
+
+        region = f"pct:{x_pct:.4f},{y_pct:.4f},{w_pct:.4f},{h_pct:.4f}"
+
         for base in self.processor._iter_api_bases(self.params.api_base):
             version = AltoProcessor._detect_api_version(base)
             if version != "k7":
                 continue
-            iiif_info_url = f"{self.processor.iiif_base_url}/uuid:{page_uuid}/info.json"
-            try:
-                self._epub_log(f"IIIF info {iiif_info_url}")
-                resp = self.processor.session.get(iiif_info_url, timeout=15)
-                resp.raise_for_status()
-                info = resp.json()
-            except Exception as exc:  # pragma: no cover - network defensive
-                self._epub_log(f"IIIF info failed {page_uuid}: {exc}")
-                continue
-            img_w = float(info.get("width") or 0)
-            img_h = float(info.get("height") or 0)
-            if not img_w or not img_h:
-                continue
-            scale_x = img_w / page_width
-            scale_y = img_h / page_height
-            x = int(round(max(0.0, hpos) * scale_x))
-            y = int(round(max(0.0, vpos) * scale_y))
-            w = int(round(max(1.0, width) * scale_x))
-            h = int(round(max(1.0, height) * scale_y))
-            # clamp to image bounds
-            if x + w > img_w:
-                w = max(1, int(img_w) - x)
-            if y + h > img_h:
-                h = max(1, int(img_h) - y)
-            max_side = max(w, h)
-            size_part = "max"
-            if max_side > 1600:
-                size_part = f",{1600}"
-            region = f"{x},{y},{w},{h}"
-            iiif_image_url = f"{self.processor.iiif_base_url}/uuid:{page_uuid}/{region}/{size_part}/0/default.jpg"
+            iiif_base = self.processor._get_iiif_base_for_api(base)
+            iiif_image_url = f"{iiif_base}/uuid:{page_uuid}/{region}/max/0/default.jpg"
             try:
                 self._epub_log(f"IIIF crop {iiif_image_url}")
                 img_resp = self.processor.session.get(iiif_image_url, timeout=20)
                 img_resp.raise_for_status()
                 data = img_resp.content
                 if data:
-                    return data
+                    try:
+                        from PIL import Image
+                        import io
+
+                        with Image.open(io.BytesIO(data)) as img:
+                            max_side = max(img.width, img.height)
+                            if max_side <= 1600:
+                                return data
+                            scale = 1600 / float(max_side)
+                            new_size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+                            resized = img.resize(new_size, Image.LANCZOS)
+                            buf = io.BytesIO()
+                            resized.save(buf, format="JPEG", quality=85, optimize=True)
+                            return buf.getvalue()
+                    except Exception:
+                        return data
             except Exception as exc:  # pragma: no cover
                 self._epub_log(f"IIIF crop failed {page_uuid}: {exc}")
                 continue
@@ -906,7 +917,10 @@ class ExportBuilder:
             self._epub_log(f"Nalezeno ilustrací: {len(illustration_notes)}")
         cache: Dict[tuple, bytes] = {}
         counter = 0
+        progress_total = max(1, self._pages_total * 2 + 1)
         for note in illustration_notes:
+            self._epub_illustration_done += 1
+            processed = min(progress_total, self._pages_total + self._epub_illustration_done)
             image_uuid = (
                 note.get("data-uuid")
                 or note.get("data-image")
@@ -963,6 +977,7 @@ class ExportBuilder:
             img["alt"] = alt_text
             figure.append(img)
             note.replace_with(figure)
+            self.job.update_progress(processed, progress_total, f"Zpracování ilustrace {self._epub_illustration_done}/{self._epub_illustration_total}")
 
     def _build_epub(self, html_document: str) -> str:
         soup = BeautifulSoup(html_document or "", "html.parser")
